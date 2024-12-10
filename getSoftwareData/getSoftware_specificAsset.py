@@ -4,7 +4,7 @@ import csv
 
 # Replace with your RunZero API key
 # 
-RUNZERO_ORG_TOKEN = 'XXXXXXXXXXX'
+RUNZERO_ORG_TOKEN = 'XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
 
 # Base URL for RunZero API
 base_url = 'https://console.runzero.com/api/v1.0'
@@ -30,7 +30,7 @@ def get_software(api_key):
         'Authorization': f'Bearer {api_key}'
     }
     
-    response = requests.get(url, fields=['software_asset_id,software_product,software_version'], headers=headers)
+    response = requests.get(url, params={'fields': ['software_asset_id,software_product,software_version']}, headers=headers)
     
     if response.status_code == 200:
         return response.json()
