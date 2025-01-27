@@ -5,31 +5,43 @@ load('runzero.types', 'ImportAsset', 'NetworkInterface')
 load('json', json_encode='encode', json_decode='decode')
 load('net', 'ip_address')
 load('http', http_post='post', http_get='get', 'url_encode')
+load('encoding/base64.star', 'base64')
 
 ## Cisco ISE API URL
-CISCO_ISE_API_URL = "https://CISCO_ISE_URL.cisco.com/api/v1/endpoint"
+CISCO_ISE_API_URL = "https://ip_address:443/ers/config/endpoint"
 
-def get_ise_endpoints(TOKEN)
+def get_ise_endpoints(username,password)
     endpoints = []
     hasNextPage = True
-    query = {
-      "limit": "500",
-      "page": "0"
-    }
-    body = 
+    page = 1
+    page_size = 100
+
+    auth_str = "{}:{}".format(username,password)
+    auth_str = base64.encode(auth_str,encoding="standard")
+
+
+    headers = {"Authorization: Basic {}".format(auth_str), "Content-Type": "application/json", "Accept": "application/json"}
 
     while hasNextPage:
-        body = {"query": query}
+        params = {"page": page, "page-size": page_size}
+
         data = http_get(CISCO_ISE_API_URL,
-            headers={"Authorization": f"Bearer {TOKEN}"},
-            body = bytes(json_encode(body)),
+            headers=headers,
+            params = params,
             )
         
-        json_data = json_decode(data.body)
-        new_endpoints = json_data.get("data", {}).get("endpoints", {}).get("edges", {})
-        endpoints.extend(new_endpoints)
+        if data.status_code != 200:
+            print("unsuccessful request", "url = {}".format(url), resp.status_code)
+            return endpoints
         
-        hasNextPage = json_data.get("data", {}).get("endpoints", {}).get("pageInfo", {}).get("hasNextPage", False)
+        inventory = json_decode(data.body)
+        new_endpoints = inventory.get("resources",None)
+        if not new_endpoints:
+            hasNextPage = False
+            continue
+        
+        endpoints.extend(new_endpoints)
+        page += 1
     
     return endpoints
 
@@ -52,7 +64,6 @@ def build_asset(item):
     ipAddress = item.get("ipAddress", None)
     mac = item.get("mac", None)
     name = item.get("name", None)
-    serialNumber = item.get("serialNumber", None)
 
     ips = [ipAddress]
     networks = []
@@ -66,9 +77,7 @@ def build_asset(item):
         hostnames=name,
         customAttributes={
             "groupId": groupId,
-            "serialNumber": serialNumber,
         }
-        device_type=device_type
     )
 
 def asset_networks(ips,mac):
@@ -92,9 +101,10 @@ def asset_networks(ips,mac):
 
 
 def main(*args,**kwargs):
-    TOKEN = kwargs['access_secret']
+    username = kwargs['access_key']
+    password = kwargs['access_secret']
 
-    cisco_ise_endpoints = get_ise_endpoints(TOKEN)
+    cisco_ise_endpoints = get_ise_endpoints(username,password)
 
     if not cisco_ise_endpoints:
         print("Got nothing from Cisco ISE")
