@@ -18,7 +18,7 @@ def get_endpoints(automox_token):
     endpoints = []
     hasNextPage = True
     headers = {
-        "Authorization": f"Bearer {automox_token}"
+        "Authorization": "Bearer {}".format(automox_token)
     }
     while hasNextPage:
         data = http_post(

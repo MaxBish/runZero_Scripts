@@ -5,43 +5,45 @@ load('runzero.types', 'ImportAsset', 'NetworkInterface')
 load('json', json_encode='encode', json_decode='decode')
 load('net', 'ip_address')
 load('http', http_post='post', http_get='get', 'url_encode')
-load('encoding/base64.star', 'base64')
 
 ## Cisco ISE API URL
-CISCO_ISE_API_URL = "https://ip_address:443/ers/config/endpoint"
+CISCO_ISE_API_URL = "XXXXXXXXXXX"
 
-def get_ise_endpoints(username,password)
+
+def get_ise_endpoints(username,password):
     endpoints = []
     hasNextPage = True
     page = 1
     page_size = 100
 
-    auth_str = "{}:{}".format(username,password)
-    auth_str = base64.encode(auth_str,encoding="standard")
-
-
-    headers = {"Authorization: Basic {}".format(auth_str), "Content-Type": "application/json", "Accept": "application/json"}
+    headers = {
+        'accept': "application/json",
+        'authorization': " ".join(("Basic",auth_string)),
+        'content-type': "application/json; charset=utf-8",
+        'cache-control': "no-cache"
+    }
 
     while hasNextPage:
-        params = {"page": page, "page-size": page_size}
+        params = {"page": page,
+                "size": page_size
+                }
 
         data = http_get(CISCO_ISE_API_URL,
             headers=headers,
-            params = params,
+            params=params
             )
-        
+    
         if data.status_code != 200:
-            print("unsuccessful request", "url = {}".format(url), resp.status_code)
+            print("unsuccessful request", "url = {}".format(CISCO_ISE_API_URL), data.status_code, data.message)
             return endpoints
-        
+    
         inventory = json_decode(data.body)
-        new_endpoints = inventory.get("resources",None)
-        if not new_endpoints:
+        if not inventory:
             hasNextPage = False
-            continue
-        
-        endpoints.extend(new_endpoints)
-        page += 1
+        else:
+            endpoints.extend(inventory)
+            print(inventory)
+            page += 1
     
     return endpoints
 
@@ -116,4 +118,3 @@ def main(*args,**kwargs):
         print("no assets")
 
     return assets
-
