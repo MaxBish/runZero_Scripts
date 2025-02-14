@@ -13,7 +13,7 @@ def get_cortex_inventory(cortex_api_key_id, cortex_api_key):
     hasNextPage = True
     endpoints = []
     payload = {}
-    search_to = 100
+    search_to = 99
     search_from = 0
 
     ## Generate headers
@@ -25,7 +25,7 @@ def get_cortex_inventory(cortex_api_key_id, cortex_api_key):
     }
 
     while hasNextPage:
-        params={"search_from": search_from, "search_to": search_to}
+        params={"search_from": str(search_from), "search_to": str(search_to)}
 
         resp = http_post(CORTEX_URL, headers=headers, body=bytes(json_encode(params)))
         if resp.status_code != 200:

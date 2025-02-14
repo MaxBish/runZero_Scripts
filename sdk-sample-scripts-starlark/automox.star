@@ -6,40 +6,44 @@ load('json', json_encode='encode', json_decode='decode')
 load('net', 'ip_address')
 load('http', http_post='post', http_get='get', 'url_encode')
 
+
 ## Automox API URL
 AUTOMOX_URL = 'https://console.automox.com/api/servers'
 
-def get_endpoints(automox_token):
-    query = {
-        "limit": "500",
-        "page": "0"
-    }
 
+def get_endpoints(automox_token):
+    limit = 500
+    page = 0
     endpoints = []
     hasNextPage = True
     headers = {
-        "Authorization": "Bearer {}".format(automox_token)
+        "Authorization": "Bearer {automox_token}"
     }
+
     while hasNextPage:
-        data = http_post(
+        query = {"limit": str(limit), "page": str(page)}
+        
+        data = http_get(
             AUTOMOX_URL,
             headers=headers,
             params=query,
         )
 
         json_data = json_decode(data.body)
-        new_endpoints = json_data.get("data",{}).get("endpoints", {}).get("edges", [])
-        endpoints.extend(new_endpoints)
 
-        hasNextPage = json_data.get("data", {}).get("endpoints", {}).get("pageInfo", {}).get("hasNextPage", False)
+        if not json_data:
+            hasNextPage = False
+            continue
+        
+        endpoints.extend(json_data)
+        page += 1
 
     return endpoints
 
 def build_assets(inventory):
     assets = []
     for item in inventory:
-        asset_info = item.get("node", {})
-        asset = build_asset(asset_info)
+        asset = build_asset(item)
         if asset:
             assets.append(asset)
 
@@ -50,6 +54,7 @@ def build_asset(item):
     if not asset_id:
         return None
 
+    host_name = item.get("name", None)
     os_version = item.get("os_version", None)
     os_name = item.get("os_name", None)
     os_family = item.get("os_family", None)
@@ -57,11 +62,16 @@ def build_asset(item):
     compliant = item.get("compliant", None)
     serial_number = item.get("serial_number", None)
 
-      ## handle IPs
+
+      ## handle IPs and MACs
     ips = []
-    ips.append(endpoint['ip_addrs'])
-    ips.append(endpoint['ip_addrs_private'])
+    ips.append(item.get("ip_addrs", None))
+    ips.append(item.get("ip_addrs_private", None))
     networks = []
+    mac_address = []
+    NICS_info = item.get("NICS", None)
+    mac_address = NICS_info.get("MAC", None)
+
     for m in mac_address:
         network = asset_networks(ips=ips, mac=m)
         networks.append(network)
@@ -69,7 +79,7 @@ def build_asset(item):
     return ImportAsset(
          id=asset_id,
          networkInterfaces=networks
-         hostnames=item.get("name", None),
+         hostnames=host_name,
          os_version=os_version,
          customAttributes={
             "os_name": os_name,
@@ -94,7 +104,6 @@ def asset_networks(ips, mac):
     if not mac:
         return NetworkInterface(ipv4Addresses=ip4s,ipv6Addresses=ip6s)
     return NetworkInterface(macAddress = mac, ipv4Addresses=ip4s, ipv6Addresses=ip6s)
-
 
 def main(*args,**kwargs):
     automox_token = kwargs['access_secret']
