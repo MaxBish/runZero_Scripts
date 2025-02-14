@@ -29,6 +29,10 @@ def get_endpoints(automox_token):
             params=query,
         )
 
+        if data.status_code != 200:
+            print("unsuccessful request", "url={}".format(AUTOMOX_URL), data.status_code, data.message)
+            return endpoints
+
         json_data = json_decode(data.body)
 
         if not json_data:
