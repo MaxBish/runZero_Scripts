@@ -29,7 +29,7 @@ def get_cortex_inventory(cortex_api_key_id, cortex_api_key):
 
         resp = http_post(CORTEX_URL, headers=headers, body=bytes(json_encode(params)))
         if resp.status_code != 200:
-            print("unsuccessful request", "url={}".format(url), resp.status_code, resp.message)
+            print("unsuccessful request", "url={}".format(CORTEX_URL), resp.status_code, resp.message)
             return endpoints
 
         inventory = json_decode(resp.body)
@@ -71,6 +71,7 @@ def build_asset(item):
     operational_status = item.get('operational_status', None)
     endpoint_name = item.get('host_name', None)
     agent_type = item.get('agent_type', None)
+    m = item.get('mac_address', None)
 
     # create network interfaces
     ips = [ip_address]
@@ -92,7 +93,7 @@ def build_asset(item):
 def build_assets(inventory):
     assets = []
     for item in inventory:
-        asset = build_asset(asset_info)
+        asset = build_asset(item)
         if asset:
             assets.append(asset)
 
