@@ -1,58 +1,48 @@
+## Cortex XDR - Starlark script 
+
 load('runzero.types', 'ImportAsset', 'NetworkInterface')
 load('json', json_encode='encode', json_decode='decode')
 load('net', 'ip_address')
 load('http', http_post='post', http_get='get', 'url_encode')
 
 
-CORTEX_URL = 'https://api-{FQDN}/'
+CORTEX_URL = 'https://api-{FQDN}/public_api/v1/endpoints/get_endpoints'
 
 
 def get_cortex_inventory(cortex_api_key_id, cortex_api_key):
     hasNextPage = True
     endpoints = []
-    post_data = {}
-    page_size = 100
-    page = 0
-
-    ## Generate a 64 bytes random string
-    nonce = "".join([secrets.choice(string.ascii_letters + string.digits) for _ in range(64)])
-
-    timestamp = int(datetime.now(timezone.utc).time()) * 1000
-
-    auth_key = "%s%s%s" % (cortex_api_key, nonce, timestamp)
-
-    auth_key = auth_key.encode("utf-8")
-
-    api_key_hash = hashlib.sha256(auth_key).hexdigest()
+    payload = {}
+    search_to = 100
+    search_from = 0
 
     ## Generate headers
     headers = {
-        "x-xdr-timestamp": str(timestamp),
-        "x-xdr-nonce": nonce,
         "x-xdr-auth-id": str(cortex_api_key_id),
-        "Authorization": api_key_hash
+        "Authorization": cortex_api_key,
+        "Content-Type": "application/json",
+        "Accept": "application/json"
     }
 
-    url = CORTEX_URL_URL + 'public_api/v1/endpoints/get_endpoints'
-
     while hasNextPage:
-        params={"page": page, "page-size": page_size}
-        resp = http_post(url=url, headers=headers, params=params)
+        params={"search_from": search_from, "search_to": search_to}
+
+        resp = http_post(CORTEX_URL, headers=headers, body=bytes(json_encode(params)))
         if resp.status_code != 200:
-            print("unsuccessful request", "url={}".format(url), resp.status_code)
+            print("unsuccessful request", "url={}".format(url), resp.status_code, resp.message)
             return endpoints
 
         inventory = json_decode(resp.body)
-        results = inventory.get('results', None)
+        results = inventory.get('reply', None)
         if not results:
             hasNextPage = False
             continue
 
         endpoints.extend(results)
-        page += 1
+        search_from += 100
+        search_to += 100
 
     return endpoints
-
 
 def asset_networks(ips, mac):
     ip4s = []
@@ -71,57 +61,42 @@ def asset_networks(ips, mac):
 
     return NetworkInterface(macAddress=mac, ipv4Addresses=ip4s, ipv6Addresses=ip6s)
 
-
 def build_asset(item):
-    asset_id = item.get('id', None)
+    asset_id = item.get('agent_id', None)
     if not asset_id:
         return None
 
-    operational_status = item.get("operational_status", None)
-    agent_status = item.get("endpoint_status", None)
-    agent_type = item.get("endpoint_type", None)
-    groups = ";".join(item.get("group_name", None))
-    assigned_prevention_policy = item.get("assigned_prevention_policy", None)
-    assigned_extensions_policy = item.get("assigned_extensions_policy", None)
-    endpoint_version = item.get("endpoint_version", None)
-    mac_address = item.get("mac_address", None)
-    ip_address = item.get("ip", None)
+    ip_address = item.get('ip', None)
+    agent_status = item.get('agent_status', None)
+    operational_status = item.get('operational_status', None)
+    endpoint_name = item.get('host_name', None)
+    agent_type = item.get('agent_type', None)
 
     # create network interfaces
     ips = [ip_address]
     networks = []
-    for m in mac_address:
-        network = asset_networks(ips=ips, mac=m)
-        networks.append(network)
+    network = asset_networks(ips=ips, mac=m)
+    networks.append(network)
 
     return ImportAsset(
         id=asset_id,
         networkInterfaces=networks,
-        os=item.get("operating_system", None),
-        osVersion=item.get("os_version", None),
-        hostnames=item.get("endpoint_name", None),
+        hostnames=endpoint_name,
         customAttributes={
             "operational_status": operational_status,
             "agent_status": agent_status,
             "agent_type": agent_type,
-            "groups": groups,
-            "assigned_prevention_policy": assigned_prevention_policy,
-            "assigned_extensions_policy": assigned_extensions_policy,
-            "endpoint_version": endpoint_version,
         }
     )
-
 
 def build_assets(inventory):
     assets = []
     for item in inventory:
-        asset_info = item.get("node",{})
         asset = build_asset(asset_info)
         if asset:
             assets.append(asset)
 
     return assets
-
 
 def main(*args, **kwargs):
     cortex_api_key_id = kwargs['access_key']
