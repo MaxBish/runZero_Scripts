@@ -1,126 +1,106 @@
-## AUTOMOX INTEGRATION
+## Automox!
 
-## Loading dependencies
 load('runzero.types', 'ImportAsset', 'NetworkInterface')
 load('json', json_encode='encode', json_decode='decode')
 load('net', 'ip_address')
-load('http', http_post='post', http_get='get', 'url_encode')
+load('http', http_get='get', 'url_encode')
+load('uuid', 'new_uuid')
 
+AUTOMOX_API_URL = "https://console.automox.com/api/servers"
 
-## Automox API URL
-AUTOMOX_URL = 'https://console.automox.com/api/servers'
-
-
-def get_endpoints(automox_token):
-    limit = 500
-    page = 0
-    endpoints = []
-    hasNextPage = True
+def get_automox_devices(api_token):
+    """Retrieve all devices from Automox using pagination"""
     headers = {
-        "Authorization": "Bearer {automox_token}"
+        "Authorization": "Bearer " + api_token,
+        "Content-Type": "application/json"
     }
 
-    while hasNextPage:
-        query = {"limit": str(limit), "page": str(page)}
-        
-        data = http_get(
-            AUTOMOX_URL,
-            headers=headers,
-            params=query,
-        )
+    query = {
+        "limit": "500",
+        "page": "0"
+    }
 
-        if data.status_code != 200:
-            print("unsuccessful request", "url={}".format(AUTOMOX_URL), data.status_code, data.message)
-            return endpoints
+    devices = []
 
-        json_data = json_decode(data.body)
+    while True:
+        response = http_get(AUTOMOX_API_URL, headers=headers, params=url_encode(query))
 
-        if not json_data:
-            hasNextPage = False
-            continue
-        
-        endpoints.extend(json_data)
-        page += 1
+        if response.status_code != 200:
+            print("Failed to fetch devices from Automox. Status:", response.status_code)
+            return devices
 
-    return endpoints
+        batch = json_decode(response.body)
 
-def build_assets(inventory):
+        if not batch:
+            break  # Stop fetching if no more results are returned
+
+        devices.extend(batch)
+        query["page"] = str(int(query["page"]) + 1)
+
+    print("Loaded", len(devices), "devices")
+    return devices
+
+def build_assets(api_token):
+    """Convert Automox device data into runZero asset format"""
+    all_devices = get_automox_devices(api_token)
     assets = []
-    for item in inventory:
-        asset = build_asset(item)
-        if asset:
-            assets.append(asset)
 
+    for device in all_devices:
+        custom_attrs = {
+            "os_version": device.get("os_version", ""),
+            "os_name": device.get("os_name", ""),
+            "os_family": device.get("os_family", ""),
+            "agent_version": device.get("agent_version", ""),
+            "compliant": str(device.get("compliant", "")),
+            "last_logged_in_user": device.get("last_logged_in_user", ""),
+            "serial_number": device.get("serial_number", ""),
+            "agent_status": device.get("status", {}).get("agent_status", "")
+        }
+
+        mac_address = ""
+        if device.get("detail", {}).get("NICS"):
+            mac_address = device["detail"]["NICS"][0].get("MAC", "")
+
+        # Collect IPs
+        ips = device.get("ip_addrs", []) + device.get("ip_addrs_private", [])
+
+        assets.append(
+            ImportAsset(
+                id=str(device.get("id", new_uuid())),
+                networkInterfaces=[build_network_interface(ips, mac_address)],
+                hostnames=[device.get("name", "")],
+                os_version=device.get("os_version", ""),
+                os=device.get("os_name", ""),
+                customAttributes=custom_attrs
+            )
+        )
     return assets
 
-def build_asset(item):
-    asset_id = item.get("id", None)
-    if not asset_id:
-        return None
-
-    host_name = item.get("name", None)
-    os_version = item.get("os_version", None)
-    os_name = item.get("os_name", None)
-    os_family = item.get("os_family", None)
-    agent_version = item.get("agent_version", None)
-    compliant = item.get("compliant", None)
-    serial_number = item.get("serial_number", None)
-
-
-      ## handle IPs and MACs
-    ips = []
-    ips.append(item.get("ip_addrs", None))
-    ips.append(item.get("ip_addrs_private", None))
-    networks = []
-    mac_address = []
-    NICS_info = item.get("NICS", None)
-    mac_address = NICS_info.get("MAC", None)
-
-    for m in mac_address:
-        network = asset_networks(ips=ips, mac=m)
-        networks.append(network)
-
-    return ImportAsset(
-         id=asset_id,
-         networkInterfaces=networks
-         hostnames=host_name,
-         os_version=os_version,
-         customAttributes={
-            "os_name": os_name,
-            "os_family": os_family,
-            "agent_version": agent_version,
-            "compliant": compliant,
-            "serial_number": serial_number,
-         }
-      )
-
-def asset_networks(ips, mac):
+def build_network_interface(ips, mac=None):
+    """Convert IPs and MAC addresses into a NetworkInterface object"""
     ip4s = []
     ip6s = []
+
     for ip in ips[:99]:
-        ip_addr = ip_address(ip)
-        if ip_addr.version == 4:
-            ip4s.append(ip_addr)
-        elif ip_addr.version == 6:
-            ip6s.append(ip_addr)
+        if ip:
+            ip_addr = ip_address(ip)
+            if ip_addr.version == 4:
+                ip4s.append(ip_addr)
+            elif ip_addr.version == 6:
+                ip6s.append(ip_addr)
         else:
             continue
-    if not mac:
-        return NetworkInterface(ipv4Addresses=ip4s,ipv6Addresses=ip6s)
-    return NetworkInterface(macAddress = mac, ipv4Addresses=ip4s, ipv6Addresses=ip6s)
 
-def main(*args,**kwargs):
-    automox_token = kwargs['access_secret']
+    return NetworkInterface(macAddress=mac, ipv4Addresses=ip4s, ipv6Addresses=ip6s)
 
-    automox_endpoints = get_endpoints(automox_token)
+def main(**kwargs):
+    """Main function to retrieve and return Automox asset data"""
+    api_token = kwargs['access_secret']  # Use API token from runZero credentials
 
-    if not automox_endpoints:
-        print("nothing from Automox")
+    assets = build_assets(api_token)
+    
+    if not assets:
+        print("No assets retrieved from Automox")
         return None
 
-    assets = build_assets(automox_endpoints)
-
-    if not assets:
-        print("no assets")
-    
     return assets
