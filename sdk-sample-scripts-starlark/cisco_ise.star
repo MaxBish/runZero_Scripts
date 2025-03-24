@@ -3,15 +3,16 @@ load('json', json_encode='encode', json_decode='decode')
 load('net', 'ip_address')
 load('http', http_get='get', 'url_encode')
 
-CISCO_ISE_HOST = "<UPDATE_ME>"  # Example: https://ise.example.com
-ENDPOINTS_API_URL = "{}/api/v1/endpoint"
-PAGE_SIZE = 100  # Number of endpoints per API call
+# Constants
+CISCO_ISE_HOST = "XXXXXXXXXXXX"
+ENDPOINTS_API_URL = "{}/api/v1/endpoint".format(CISCO_ISE_HOST)
+PAGE_SIZE = 50  # Number of endpoints per API call
 
 def get_endpoints(username, password):
-    """Retrieve all endpoints from Cisco ISE using pagination"""
+    """Retrieve all endpoints from Cisco ISE using pagination."""
     headers = {
         "Accept": "application/json",
-        "Authorization": "Basic "+password,
+        "Authorization": "Basic " + password,
         "Content-Type": "application/json",
     }
 
@@ -19,18 +20,17 @@ def get_endpoints(username, password):
     page = 1
 
     while True:
-        url = ENDPOINTS_API_URL.format(CISCO_ISE_HOST) + "?size={}&page={}".format(PAGE_SIZE, page)
-        response = http_get(url, headers=headers)
+        url = "{}?page={}&size={}".format(ENDPOINTS_API_URL, page, PAGE_SIZE)
+        response = http_get(url, headers=headers, timeout=600)
 
         if response.status_code == 401:
             print("Authentication failed: Invalid credentials.")
             return []
         elif response.status_code != 200:
             print("Failed to retrieve endpoints. Status: {}".format(response.status_code))
-            break
+            return []
 
-        response_json = json_decode(response.body)
-        batch = response_json
+        batch = json_decode(response.body) or []
 
         if not batch:
             break  # No more data to retrieve
@@ -40,54 +40,9 @@ def get_endpoints(username, password):
 
     return endpoints
 
-def build_assets(endpoints):
-    """Convert Cisco ISE endpoints into runZero assets"""
-    assets = []
-    
-    for endpoint in endpoints:
-        endpoint_id = endpoint.get("id", "")
-        hostname = endpoint.get("name", "")
-        ip = endpoint.get("ipAddress", "")
-        mac = endpoint.get("mac", "")
-        vendor = endpoint.get("vendor", "")
-        description = endpoint.get("description", "")
-        device_type = endpoint.get("deviceType", "")
-        serial_number = endpoint.get("serialNumber", "")
-        software_revision = endpoint.get("softwareRevision", "")
-        hardware_revision = endpoint.get("hardwareRevision", "")
-        product_id = endpoint.get("productId", "")
-        profile_id = endpoint.get("profileId", "")
-
-        # Build network interfaces
-        network = build_network_interface(ips=[ip], mac=mac if mac else None)
-
-        # Manually build customAttributes for compatibility
-        custom_attrs = {
-            "vendor": vendor,
-            "description": description,
-            "deviceType": device_type,
-            "serialNumber": serial_number,
-            "softwareRevision": software_revision,
-            "hardwareRevision": hardware_revision,
-            "productId": product_id,
-            "profileId": profile_id,
-        }
-
-        assets.append(
-            ImportAsset(
-                id=endpoint_id,
-                hostnames=[hostname],
-                networkInterfaces=[network],
-                customAttributes=custom_attrs
-            )
-        )
-
-    return assets
-
-def build_network_interface(ips, mac):
-    """Build runZero network interfaces"""
-    ip4s = []
-    ip6s = []
+def build_network_interface(ips, mac=None):
+    """Build a runZero network interface object."""
+    ip4s, ip6s = [], []
 
     for ip in ips[:99]:
         if ip:
@@ -99,20 +54,53 @@ def build_network_interface(ips, mac):
 
     return NetworkInterface(macAddress=mac, ipv4Addresses=ip4s, ipv6Addresses=ip6s)
 
-def main(*args, **kwargs):
-    """Main function for Cisco ISE integration"""
-    username = kwargs['access_key']  # Username stored in runZero credentials
-    password = kwargs['access_secret']  # Password stored in runZero credentials
+def build_assets(endpoints):
+    """Convert Cisco ISE endpoints into runZero assets."""
+    assets = []
+
+    for endpoint in endpoints:
+        network = build_network_interface(ips=[endpoint.get("ipAddress", "")], mac=endpoint.get("mac", None))
+
+        custom_attrs = {
+            "vendor": endpoint.get("vendor", ""),
+            "description": endpoint.get("description", ""),
+            "deviceType": endpoint.get("deviceType", ""),
+            "serialNumber": endpoint.get("serialNumber", ""),
+            "softwareRevision": endpoint.get("softwareRevision", ""),
+            "hardwareRevision": endpoint.get("hardwareRevision", ""),
+            "productId": endpoint.get("productId", ""),
+            "profileId": endpoint.get("profileId", ""),
+        }
+
+        assets.append(
+            ImportAsset(
+                id=endpoint.get("id", ""),
+                hostnames=[endpoint.get("name", "")],
+                networkInterfaces=[network],
+                customAttributes=custom_attrs
+            )
+        )
+
+    return assets
+
+def main(**kwargs):
+    """Main function for Cisco ISE integration."""
+    username = kwargs.get("access_key", "")
+    password = kwargs.get("access_secret", "")
+
+    if not username or not password:
+        print("Missing authentication credentials.")
+        return None
 
     endpoints = get_endpoints(username, password)
-    
+
     if not endpoints:
         print("No endpoints found.")
         return None
 
     assets = build_assets(endpoints)
-    
+
     if not assets:
         print("No assets created.")
-    
+
     return assets
