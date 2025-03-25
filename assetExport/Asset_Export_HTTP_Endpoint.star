@@ -43,14 +43,16 @@ def fetch_software(headers, asset_id):
     Returns:
       list: A list of software information for the specified asset, or an empty list if the request fails.
     """
-    url = "{}/export/org/software.json?{}".format(BASE_URL, url_encode({"search": "asset_id:{}".format(asset_id), "fields": software_params}))
-    response = http_get(url, headers=headers)
+    url = "{}/export/org/software.json".format(BASE_URL)
+    params = {"search": "asset_id:{}".format(asset_id), "fields": software_params}
+
+    response = http_get(url, headers=headers, params=params)
     if response.status_code == 200:
         software_data = json_decode(response.body)
         return software_data
     else:
         print("Failed to fetch software for asset {} - status code {}".format(asset_id, response.status_code))
-        return None
+        return []
 
 def fetch_vulnerabilities(headers, asset_id):
     """Retrieve vulnerability information for a specific asset.
@@ -62,8 +64,9 @@ def fetch_vulnerabilities(headers, asset_id):
     Returns:
         list: A list of vulnerability information for the specified asset, or an empty list if the request fails.
     """
-    url = "{}/export/org/vulnerabilities.json?{}".format(BASE_URL, url_encode({"search": "asset_id:{}".format(asset_id), "fields": vuln_params}))
-    response = http_get(url, headers=headers)
+    url = "{}/export/org/vulnerabilities.json".format(BASE_URL)
+    params = {"search": "asset_id:{}".format(asset_id), "fields": vuln_params}
+    response = http_get(url, headers=headers, params=params)
     if response.status_code == 200:
         vulnerability_data = json_decode(response.body)
         return vulnerability_data
@@ -99,23 +102,26 @@ def main(**kwargs):
     """
     headers = {"Authorization": "Bearer {}".format(kwargs["access_secret"])}
     assets = fetch_assets(headers)
-    for asset in assets:
-        count = 0
-        asset_id = asset.get("id", "")
-        asset_address = asset.get("addresses", [""])[0]
-        print("Getting vuln and software data for IP: {}".format(asset_address))
-
-        # Fetch and append software data
-        software_data = fetch_software(headers, asset_id)
-        if software_data:
-            assets[count]["software"] = software_data
-
-        # Fetch and append vulnerability data
-        vulnerability_data = fetch_vulnerabilities(headers, asset_id)
-        if vulnerability_data:
-            assets[count]["vulnerabilities"] = vulnerability_data
-
-        count = count + 1
-
     if assets:
+        for asset in assets:
+            count = 0
+            asset_id = asset.get("id", "")
+            asset_address = asset.get("addresses", [""])[0]
+            print("Getting vuln and software data for IP: {}".format(asset_address))
+
+            # Fetch and append software data
+            software_data = fetch_software(headers, asset_id)
+            if software_data:
+                assets[count]["software"] = software_data
+
+            # Fetch and append vulnerability data
+            vulnerability_data = fetch_vulnerabilities(headers, asset_id)
+            if vulnerability_data:
+                assets[count]["vulnerabilities"] = vulnerability_data
+
+            count = count + 1
+
+        # Send the assets to the HTTP endpoint
         send_to_http_endpoint(assets)
+    else:
+        print("No assets found - check task data for error code")
