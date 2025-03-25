@@ -1,7 +1,7 @@
 ## Asset Export to HTTP Endpoint (Starlark)
 
 load('json', json_encode='encode', json_decode='decode')
-load('http', http_post='post', http_get='get')
+load('http', http_post='post', http_get='get', 'url_encode')
 
 # Configuration
 HTTP_ENDPOINT = "<UPDATE_ME>"
