@@ -18,8 +18,9 @@ def get_endpoints(username, password):
 
     endpoints = []
     page = 1
+    hasNextPage = True
 
-    while True:
+    while hasNextPage:
         url = "{}?page={}&size={}".format(ENDPOINTS_API_URL, page, PAGE_SIZE)
         response = http_get(url, headers=headers, timeout=600)
 
@@ -30,10 +31,10 @@ def get_endpoints(username, password):
             print("Failed to retrieve endpoints. Status: {}".format(response.status_code))
             return []
 
-        batch = json_decode(response.body) or []
+        batch = json_decode(response.body) or None
 
-        if not batch:
-            break  # No more data to retrieve
+        if len(batch) < 50:
+            hasNextPage = False  # No more data to retrieve
 
         endpoints.extend(batch)
         page += 1
@@ -83,10 +84,10 @@ def build_assets(endpoints):
 
     return assets
 
-def main(**kwargs):
+def main(*args, **kwargs):
     """Main function for Cisco ISE integration."""
-    username = kwargs.get("access_key", "")
-    password = kwargs.get("access_secret", "")
+    username = kwargs['access_key']
+    password = kwargs['access_secret']
 
     if not username or not password:
         print("Missing authentication credentials.")
