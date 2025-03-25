@@ -9,8 +9,9 @@ SEARCH = "id:XXXXXXXXXXXX"
 def get_assets(headers):
     """Fetch assets from runZero API."""
     assets = []
-    url = f"{BASE_URL}/org/assets?search={SEARCH}"
-    response = requests.get(url, headers=headers)
+    url = f"{BASE_URL}/org/assets"
+    params = {"search": SEARCH}
+    response = requests.get(url, headers=headers, params=params)
 
     if response.status_code == 200:
         assets_json = response.json()
@@ -41,9 +42,11 @@ def sync_to_http_endpoint(assets):
         print("No assets found")
 
 def get_software(headers, asset_id):
-    url = f"{BASE_URL}/export/org/software.json?search=asset_id:{asset_id}"
+    url = f"{BASE_URL}/export/org/software.json"
 
-    response = requests.get(url, headers=headers)
+    params = {"search": f"asset_id:{asset_id}", "fields": ["software_vendor,software_product,software_version"]}
+
+    response = requests.get(url, headers=headers, params=params)
 
     if response.status_code == 200:
         return response.json()
@@ -53,9 +56,11 @@ def get_software(headers, asset_id):
     
 
 def get_vulnerabilities(headers, asset_id):
-    url = f"{BASE_URL}/export/org/vulnerabilities.json?search=asset_id:{asset_id}"
+    url = f"{BASE_URL}/export/org/vulnerabilities.json"
 
-    response = requests.get(url, headers=headers)
+    params = {"search": f"asset_id:{asset_id}", "fields": ['vulnerability_name,vulnerability_cve,vulnerability_risk,vulnerability_exploitable']}
+
+    response = requests.get(url, headers=headers, params=params)
 
     if response.status_code == 200:
         return response.json()
@@ -71,6 +76,7 @@ def main():
 
     if assets:
         for asset in assets:
+            count = 0
             id = asset["id"]
             name = asset["names"]
             asset_address = asset["addresses"][0]
@@ -80,7 +86,7 @@ def main():
             software_list = get_software(headers=headers, asset_id=id)
 
             if software_list:
-                asset["software"] = software_list
+                assets[count]["software"] = software_list
             else:
                 print(f"No software data found for asset {asset_address}")
 
@@ -89,9 +95,11 @@ def main():
             vulnerability_list = get_vulnerabilities(headers=headers, asset_id=id)
 
             if vulnerability_list:
-                asset["vulnerabilities"] = vulnerability_list
+                assets[count]["vulnerabilities"] = vulnerability_list
             else:
                 print(f"No vulnerability data found for asset {asset_address}")
+
+            count = count + 1
         
         sync_to_http_endpoint(assets)
 
