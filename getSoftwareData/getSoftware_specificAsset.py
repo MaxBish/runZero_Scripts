@@ -67,7 +67,7 @@ def main():
 
                 print(f"  - {software['software_product']} (Version: {software['software_version']})")
 
-                row = [asset_address, asset_name,software['software_product'], software['software_version']]
+                row = [asset_address, asset_name,software['software_vendor'], software['software_product'], software['software_version']]
 
                 data.append(row)
     else:
@@ -75,7 +75,7 @@ def main():
 
     with open(file_path, 'w', newline='') as file:
         writer = csv.writer(file)
-        writer.writerow(['Asset IP', 'Asset Name', 'Software', 'Version'])
+        writer.writerow(['Asset IP', 'Asset Name', 'Software Vendor', 'Software Product', 'Version'])
         writer.writerows(data)
 
 if __name__ == '__main__':
