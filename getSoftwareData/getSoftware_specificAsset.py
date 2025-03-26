@@ -11,7 +11,7 @@ base_url = 'https://console.runzero.com/api/v1.0'
 
 # Function to get the list of assets
 def get_assets(api_key):
-    query = 'alive:t and type:=server'
+    query = 'has_ipv4:true'
     url = f'{base_url}/export/org/assets.json'
     headers = {'Authorization': f'Bearer {api_key}'}
 
