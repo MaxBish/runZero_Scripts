@@ -4,7 +4,7 @@ load('net', 'ip_address')
 load('http', http_get='get', 'url_encode')
 
 # Constants
-CISCO_ISE_HOST = "XXXXXXXXXXXX"
+CISCO_ISE_HOST = "XXXXXXXXXXXXXX"
 ENDPOINTS_API_URL = "{}/api/v1/endpoint".format(CISCO_ISE_HOST)
 PAGE_SIZE = 50  # Number of endpoints per API call
 
@@ -32,6 +32,7 @@ def get_endpoints(username, password):
             return []
 
         batch = json_decode(response.body) or None
+        print(batch)
 
         if len(batch) < 50:
             hasNextPage = False  # No more data to retrieve
