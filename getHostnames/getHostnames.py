@@ -1,23 +1,21 @@
 import requests
 import csv
 
-# Config
-RUNZERO_API_TOKEN = "your_runzero_api_token"
+# ========== Configuration ==========
+RUNZERO_API_TOKEN = "RUNZERO_ORG_TOKEN"  # Replace with your runZero Org Token
 RUNZERO_API_URL = "https://console.runzero.com/api/v1.0"
-
-# Input/Output files
 INPUT_FILE = "ips.txt"
 OUTPUT_FILE = "ips_output.csv"
 
-# Headers for runZero API
 HEADERS = {
     "Authorization": f"Bearer {RUNZERO_API_TOKEN}",
     "Content-Type": "application/json"
 }
 
+# ========== API Query ==========
 def get_assets_by_ip(ip):
     """Query runZero for assets matching a specific IP address."""
-    params = {"search": "address:" + ip, "fields": "addresses,names"}
+    params = {"search": f"address:{ip}", "fields": "addresses,names"}
     response = requests.get(
         f"{RUNZERO_API_URL}/org/assets",
         headers=HEADERS,
@@ -26,6 +24,7 @@ def get_assets_by_ip(ip):
     response.raise_for_status()
     return response.json()
 
+# ========== Main Logic ==========
 def main():
     results = []
 
@@ -34,20 +33,34 @@ def main():
 
     for ip in ips:
         print(f"Looking up IP: {ip}")
-        assets = get_assets_by_ip(ip)
-        for asset in assets:
+        try:
+            assets = get_assets_by_ip(ip)
+            if assets:
+                for asset in assets:
+                    results.append({
+                        "ip": ", ".join(asset["addresses"]),
+                        "hostname": ", ".join(asset["names"]),
+                    })
+            else:
+                results.append({
+                    "ip": ip,
+                    "hostname": "No asset found"
+                })
+        except requests.exceptions.HTTPError:
             results.append({
-                "addresses": asset["addresses"],
-                "hostname": asset["names"],
+                "ip": ip,
+                "hostname": "API Error"
             })
 
+    # Write results to CSV
     with open(OUTPUT_FILE, "w", newline="") as csvfile:
-        fieldnames = ["ips", "hostname"]
+        fieldnames = ["ip", "hostname"]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(results)
 
     print(f"Export complete: {OUTPUT_FILE}")
 
+# ========== Entry Point ==========
 if __name__ == "__main__":
     main()
