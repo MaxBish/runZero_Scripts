@@ -17,7 +17,7 @@ HEADERS = {
 
 def get_assets_by_ip(ip):
     """Query runZero for assets matching a specific IP address."""
-    params = {"search": "address:" + ip, "fields": "addresses,hostname"}
+    params = {"search": "address:" + ip, "fields": "addresses,names"}
     response = requests.get(
         f"{RUNZERO_API_URL}/org/assets",
         headers=HEADERS,
@@ -38,7 +38,7 @@ def main():
         for asset in assets:
             results.append({
                 "addresses": asset["addresses"],
-                "hostname": asset["hostname"],
+                "hostname": asset["names"],
             })
 
     with open(OUTPUT_FILE, "w", newline="") as csvfile:
