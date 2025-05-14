@@ -12,7 +12,7 @@ def extract_sessions(xml):
     chunks = xml.split("<activeSession>")
     for chunk in chunks[1:]:
         session = {}
-        for tag in ["user_name", "calling_station_id", "nas_ip_address", "acct_session_id", "audit_session_id", "server", "framed_ip_address"]:
+        for tag in ["user_name", "calling_station_id", "nas_ip_address", "acct_session_id", "audit_session_id", "server", "framed_ip_address", "device_ip_address"]:
             open_tag = "<{}>".format(tag)
             close_tag = "</{}>".format(tag)
             if open_tag in chunk and close_tag in chunk:
@@ -66,7 +66,7 @@ def build_assets(sessions):
 
     for session in sessions:
         mac = session.get("calling_station_id")
-        ip = session.get("framed_ip_address")
+        ip = session.get("device_ip_address") or session.get("framed_ip_address")
         hostname = session.get("user_name")
 
         if not mac and not ip:
