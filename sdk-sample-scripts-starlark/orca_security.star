@@ -45,6 +45,7 @@ def build_assets(api_token):
     assets = []
 
     for asset in all_assets:
+        print(asset)
         custom_attrs = {
             "cloud_provider": asset.get("cloud_provider", ""),
             "account_id": asset.get("account_id", ""),
