@@ -7,7 +7,7 @@ load('http', http_post='post', http_get='get', 'url_encode')
 # Configuration
 HTTP_ENDPOINT = "<UPDATE_ME>"
 BASE_URL = "https://console.runZero.com/api/v1.0"
-SEARCH = "has_ipv4:true"
+SEARCH = "id:XXXXX"
 
 def fetch_assets(headers):
     """Fetches assets from the runZero API.
