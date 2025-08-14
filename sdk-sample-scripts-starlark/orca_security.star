@@ -1,5 +1,3 @@
-# ORCA Security Integration for runZero
-
 load('runzero.types', 'ImportAsset', 'NetworkInterface')
 load('json', json_encode='encode', json_decode='decode')
 load('net', 'ip_address')
@@ -31,13 +29,15 @@ def get_orca_assets(api_token):
             },
             "limit": limit,
             "start_at_index": start_at_index,
-            "order_by[]": ["-OrcaScore"],
+            # -- NEW: Corrected field name from order_by[] to order_by --
+            "order_by": ["-state.orca_score"],
             "select": [
                 "Name", # Asset name/hostname
                 "AssetUniqueId", # Unique ID for the asset
                 "CloudAccount.Name", # Cloud account name
                 "CloudAccount.CloudProvider", # Cloud provider (e.g., AWS, Azure)
-                "OrcaScore", # Orca risk score
+                # -- NEW: Corrected field name to state.orca_score --
+                "state.orca_score", # Orca risk score
                 "RiskLevel", # Risk level (e.g., Critical, High, Medium, Low, Informational)
                 "LastSeen", # Timestamp of last observation
                 "PrivateIps", # List of private IP addresses
@@ -62,7 +62,7 @@ def get_orca_assets(api_token):
         }
         
         # Execute the POST request with the JSON body
-        response = http_post(ORCA_API_BASE_URL + ORCA_SERVING_LAYER_QUERY_ENDPOINT, headers=headers, body=json_encode(request_body))
+        response = http_post(ORCA_API_BASE_URL + ORCA_SERVING_LAYER_QUERY_ENDPOINT, headers=headers, body=bytes(json_encode(request_body)),timeout=600)
 
         if response.status_code != 200:
             print("Failed to fetch assets from Orca Security. Status: {}".format(response.status_code))
@@ -130,7 +130,8 @@ def build_assets(api_token):
             "orca_tags": json_encode(asset.get("Tags", [])), # Tags are a list, encode to JSON string
             "orca_is_internet_facing": str(asset.get("IsInternetFacing", False)), # Convert boolean to string
             "orca_console_url_link": asset.get("ConsoleUrlLink", ""),
-            "orca_score": str(asset.get("OrcaScore", {}).get("value", "")) # OrcaScore is a nested object
+            # -- NEW: Correctly parse orca_score from nested 'state' field --
+            "orca_score": str(asset.get("state", {}).get("orca_score", ""))
         }
 
         # Filter out any non-string or empty IP entries before processing
@@ -162,6 +163,7 @@ def build_network_interface(ips, mac=None):
     ipv6_addresses = []
 
     for ip_str_candidate in ips:
+        # -- NEW: Add an additional check for valid string format --
         if type(ip_str_candidate) == type("") and len(ip_str_candidate) > 0 and ('.' in ip_str_candidate or ':' in ip_str_candidate):
             ip_addr = ip_address(ip_str_candidate)
             if ip_addr.version == 4:
