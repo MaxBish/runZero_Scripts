@@ -11,7 +11,7 @@ ORCA_SERVING_LAYER_QUERY_ENDPOINT = "/api/serving-layer/query"
 def get_orca_assets(api_token):
     """Retrieve assets from Orca Security Serving Layer API using POST /query endpoint."""
     headers = {
-        "Authorization": "Bearer " + api_token,
+        "Authorization": "TOKEN " + api_token,
         "Content-Type": "application/json"
     }
 
@@ -30,35 +30,30 @@ def get_orca_assets(api_token):
             "limit": limit,
             "start_at_index": start_at_index,
             # -- NEW: Corrected field name from order_by[] to order_by --
-            "order_by": ["-state.orca_score"],
+            "order_by[]": ["-OrcaScore"],
             "select": [
-                "Name", # Asset name/hostname
-                "AssetUniqueId", # Unique ID for the asset
-                "CloudAccount.Name", # Cloud account name
-                "CloudAccount.CloudProvider", # Cloud provider (e.g., AWS, Azure)
-                # -- NEW: Corrected field name to state.orca_score --
-                "state.orca_score", # Orca risk score
-                "RiskLevel", # Risk level (e.g., Critical, High, Medium, Low, Informational)
-                "LastSeen", # Timestamp of last observation
-                "PrivateIps", # List of private IP addresses
-                "PublicIps", # List of public IP addresses
-                "DistributionName", # Potential OS name
-                "DistributionVersion", # Potential OS version
-                "Type", # General asset type
-                "NewCategory", # New category for the asset
-                "NewSubCategory", # New sub-category for the asset
-                "Status", # Asset status
-                "Tags", # Associated tags
-                "IsInternetFacing", # Boolean indicating internet exposure
-                "ConsoleUrlLink" # Link to the asset in Orca console
-                # Note: MAC addresses are not explicitly listed in common 'Inventory' select examples.
-                # If crucial, further investigation with Orca support might be needed for their API.
+                "Name",
+                "CiSource",
+                "CloudAccount.Name",
+                "CloudAccount.CloudProvider",
+                "OrcaScore",
+                "RiskLevel",
+                "group_unique_id",
+                "UiUniqueField",
+                "IsInternetFacing",
+                "Tags",
+                "NewCategory",
+                "NewSubCategory",
+                "AssetUniqueId",
+                "ConsoleUrlLink"
             ],
+            "get_results_and_count": false,
             "full_graph_fetch": {
-                "enabled": True
+                "enabled": true
             },
-            "use_cache": True,
-            "max_tier": 2
+            "use_cache": true,
+            "max_tier": 2,
+            "ui": true
         }
         
         # Execute the POST request with the JSON body
