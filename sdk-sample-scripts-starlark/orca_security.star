@@ -36,7 +36,7 @@ def get_orca_assets(api_token):
                 "CiSource",
                 "CloudAccount.Name",
                 "CloudAccount.CloudProvider",
-                "OrcaScore",
+                "state.orca_score",
                 "RiskLevel",
                 "group_unique_id",
                 "UiUniqueField",
@@ -45,7 +45,13 @@ def get_orca_assets(api_token):
                 "NewCategory",
                 "NewSubCategory",
                 "AssetUniqueId",
-                "ConsoleUrlLink"
+                "ConsoleUrlLink",
+                "PrivateIps",
+                "PublicIps",
+                "DistributionName",
+                "DistributionVersion",
+                "Type",
+                "Status"
             ],
             "get_results_and_count": false,
             "full_graph_fetch": {
@@ -66,7 +72,7 @@ def get_orca_assets(api_token):
 
         response_json = json_decode(response.body)
         # Assets are now expected under the "results" key
-        batch = response_json.get("results", [])
+        batch = response_json.get("data", [])
 
         if not batch:
             hasNextPage = False
@@ -85,8 +91,8 @@ def build_assets(api_token):
 
     for asset in all_orca_assets:
         # Extract fields, handling potential missing data with default values
-        asset_id = asset.get("AssetUniqueId", "") # Use Orca's unique ID as runZero ID
-        hostname = asset.get("Name", "")
+        asset_id = asset.get("id", "") # Use Orca's unique ID as runZero ID
+        hostname = asset.get("name", "")
         os_name = asset.get("DistributionName", "") # Mapped to OS name
         os_version = asset.get("DistributionVersion", "") # Mapped to OS version
         risk_level = str(asset.get("RiskLevel", ""))
@@ -125,7 +131,6 @@ def build_assets(api_token):
             "orca_tags": json_encode(asset.get("Tags", [])), # Tags are a list, encode to JSON string
             "orca_is_internet_facing": str(asset.get("IsInternetFacing", False)), # Convert boolean to string
             "orca_console_url_link": asset.get("ConsoleUrlLink", ""),
-            # -- NEW: Correctly parse orca_score from nested 'state' field --
             "orca_score": str(asset.get("state", {}).get("orca_score", ""))
         }
 
@@ -161,15 +166,17 @@ def build_network_interface(ips, mac=None):
         # -- NEW: Add an additional check for valid string format --
         if type(ip_str_candidate) == type("") and len(ip_str_candidate) > 0 and ('.' in ip_str_candidate or ':' in ip_str_candidate):
             ip_addr = ip_address(ip_str_candidate)
-            if ip_addr.version == 4:
-                ipv4_addresses.append(ip_addr)
-            elif ip_addr.version == 6:
-                ipv6_addresses.append(ip_addr)
+                if ip_addr == None:
+                    break
+                elif ip_addr.version == 4:
+                    ipv4_addresses.append(ip_addr)
+                elif ip_addr.version == 6:
+                    ipv6_addresses.append(ip_addr)
 
     # Only return a NetworkInterface if there's at least one IP or a MAC address
-    if ipv4_addresses or ipv6_addresses or mac:
+    if mac:
         return NetworkInterface(macAddress=mac, ipv4Addresses=ipv4_addresses, ipv6Addresses=ipv6_addresses)
-    return None # Return None if no useful network information can be extracted
+    return NetworkInterface(ipv4Addresses=ipv4_addresses, ipv6Addresses=ipv6_addresses)
 
 def main(**kwargs):
     """Main function to retrieve and return Orca Security asset data for runZero."""
