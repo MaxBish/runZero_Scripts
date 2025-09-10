@@ -17,11 +17,10 @@ def get_orca_assets(api_token):
 
     all_assets = []
     start_at_index = 0
-    limit = 100 # Can be increased up to 10000 per request
+    limit = 10000
     hasNextPage = True
-
+    
     while hasNextPage:
-        # Construct the JSON request body for the Serving Layer API
         request_body = {
             "query": {
                 "models": ["Inventory"],
@@ -29,7 +28,6 @@ def get_orca_assets(api_token):
             },
             "limit": limit,
             "start_at_index": start_at_index,
-            # -- NEW: Corrected field name from order_by[] to order_by --
             "order_by[]": ["-OrcaScore"],
             "select": [
                 "Name",
@@ -53,35 +51,44 @@ def get_orca_assets(api_token):
                 "Type",
                 "Status"
             ],
-            "get_results_and_count": false,
+            "get_results_and_count": False,
             "full_graph_fetch": {
-                "enabled": true
+                "enabled": True
             },
-            "use_cache": true,
+            "use_cache": True,
             "max_tier": 2,
-            "ui": true
+            "ui": True
         }
         
-        # Execute the POST request with the JSON body
-        response = http_post(ORCA_API_BASE_URL + ORCA_SERVING_LAYER_QUERY_ENDPOINT, headers=headers, body=bytes(json_encode(request_body)),timeout=600)
+        print("Fetching page starting at index: {}".format(start_at_index))
+        response = http_post(
+            ORCA_API_BASE_URL + ORCA_SERVING_LAYER_QUERY_ENDPOINT,
+            headers=headers,
+            body=bytes(json_encode(request_body)),
+            timeout=600,
+            insecure_skip_verify=True
+        )
 
         if response.status_code != 200:
             print("Failed to fetch assets from Orca Security. Status: {}".format(response.status_code))
-            print("Response body: {}".format(response.body)) # Print response body for debugging
+            print("Response body: {}".format(response.body))
             return all_assets
 
         response_json = json_decode(response.body)
-        # Assets are now expected under the "results" key
         batch = response_json.get("data", [])
 
         if not batch:
-            hasNextPage = False
-            break # No more assets to retrieve
-
+            print("No more assets found.")
+            break
+        
         all_assets.extend(batch)
-        start_at_index += limit # Increment index for next page of results
+        start_at_index += len(batch)
+        
+        if len(batch) < limit:
+            print("Reached the last page. Total assets: {}".format(len(all_assets)))
+            hasNextPage = False
+            break
 
-    print("Loaded {} assets from Orca Serving Layer API".format(len(all_assets)))
     return all_assets
 
 def build_assets(api_token):
@@ -90,66 +97,57 @@ def build_assets(api_token):
     assets_for_runzero = []
 
     for asset in all_orca_assets:
-        # Extract fields, handling potential missing data with default values
-        asset_id = asset.get("id", "") # Use Orca's unique ID as runZero ID
-        hostname = asset.get("name", "")
-        os_name = asset.get("DistributionName", "") # Mapped to OS name
-        os_version = asset.get("DistributionVersion", "") # Mapped to OS version
+        print(asset)
+        asset_id = asset.get("AssetUniqueId", "") 
+        hostname = asset.get("Name", "")
+        os_name = asset.get("DistributionName", "")
+        os_version = asset.get("DistributionVersion", "")
         risk_level = str(asset.get("RiskLevel", ""))
         last_seen = asset.get("LastSeen", "")
         
-        # CloudAccount details are nested
         cloud_account = asset.get("CloudAccount", {})
         cloud_provider = cloud_account.get("CloudProvider", "")
         account_name = cloud_account.get("Name", "")
         
-        # Collect all IP addresses (private and public)
         private_ips_raw = asset.get("PrivateIps", [])
         public_ips_raw = asset.get("PublicIps", [])
         
         all_ips = []
-        # Check type for private_ips_raw. Lists are iterable.
         if type(private_ips_raw) == type([]):
             all_ips.extend(private_ips_raw)
-        # Check type for public_ips_raw. Lists are iterable.
         if type(public_ips_raw) == type([]):
             all_ips.extend(public_ips_raw)
 
-        # MAC Address is not directly available in the provided 'select' options for 'Inventory'.
-        # It will be an empty string unless Orca exposes it differently or it's a linked entity.
         mac_address = ""
 
-        # Build custom attributes for runZero
         custom_attrs = {
             "orca_cloud_provider": cloud_provider,
             "orca_account_name": account_name,
-            "orca_service": asset.get("Type", ""), # Using 'Type' as a general service/resource identifier
-            "orca_resource_type": asset.get("NewCategory", "") if asset.get("NewCategory") != "" else asset.get("Type", ""), # Prefer NewCategory, fallback to Type
+            "orca_service": asset.get("Type", ""),
+            "orca_resource_type": asset.get("NewCategory", "") if asset.get("NewCategory") != "" else asset.get("Type", ""),
             "orca_status": asset.get("Status", ""),
             "orca_risk_level": risk_level,
             "orca_last_seen": last_seen,
-            "orca_tags": json_encode(asset.get("Tags", [])), # Tags are a list, encode to JSON string
-            "orca_is_internet_facing": str(asset.get("IsInternetFacing", False)), # Convert boolean to string
-            "orca_console_url_link": asset.get("ConsoleUrlLink", ""),
-            "orca_score": str(asset.get("state", {}).get("orca_score", ""))
+            "orca_tags": json_encode(asset.get("Tags", [])),
+            "orca_is_internet_facing": str(asset.get("IsInternetFacing", False)),
+            "orca_score": str(asset.get("OrcaScore", ""))
         }
 
-        # Filter out any non-string or empty IP entries before processing
         valid_ips_for_interface = []
         for ip_val in all_ips:
-            if type(ip_val) == type("") and len(ip_val) > 0: # Check if it's a non-empty string
-                valid_ips_for_interface.append(ip_val)
+            if type(ip_val) == type("") and len(ip_val) > 0:
+                ip_obj = ip_address(ip_val)
+                if ip_obj:
+                    valid_ips_for_interface.append(ip_val)
 
-        # Build network interface. If no valid IPs or MAC, it will return None.
         network_interface = build_network_interface(valid_ips_for_interface, mac_address)
 
-        # Only add asset if it has a valid network interface (IPs or MAC)
-        if network_interface != None: # Explicit check for None
+        if network_interface != None:
             assets_for_runzero.append(
                 ImportAsset(
                     id=asset_id,
                     networkInterfaces=[network_interface],
-                    hostnames=[hostname] if hostname != "" else [], # Hostnames should be a list, add only if not empty string
+                    hostnames=[hostname] if hostname != "" else [],
                     os_version=os_version,
                     os=os_name,
                     customAttributes=custom_attrs
@@ -163,24 +161,19 @@ def build_network_interface(ips, mac=None):
     ipv6_addresses = []
 
     for ip_str_candidate in ips:
-        # -- NEW: Add an additional check for valid string format --
         if type(ip_str_candidate) == type("") and len(ip_str_candidate) > 0 and ('.' in ip_str_candidate or ':' in ip_str_candidate):
-            ip_addr = ip_address(ip_str_candidate)
-                if ip_addr == None:
-                    break
-                elif ip_addr.version == 4:
-                    ipv4_addresses.append(ip_addr)
-                elif ip_addr.version == 6:
-                    ipv6_addresses.append(ip_addr)
+            ip_obj = ip_address(ip_str_candidate)
+            if ip_obj and ip_obj.version == 4:
+                ipv4_addresses.append(ip_obj)
+            elif ip_obj and ip_obj.version == 6:
+                ipv6_addresses.append(ip_obj)
 
-    # Only return a NetworkInterface if there's at least one IP or a MAC address
-    if mac:
+    if ipv4_addresses or ipv6_addresses:
         return NetworkInterface(macAddress=mac, ipv4Addresses=ipv4_addresses, ipv6Addresses=ipv6_addresses)
-    return NetworkInterface(ipv4Addresses=ipv4_addresses, ipv6Addresses=ipv6_addresses)
+    return None
 
 def main(**kwargs):
     """Main function to retrieve and return Orca Security asset data for runZero."""
-    # Retrieve the API token from runZero credentials, expected as 'access_secret'
     api_token = kwargs.get('access_secret')
     if not api_token:
         print("Error: ORCA API token (access_secret) not provided in credentials.")
@@ -188,8 +181,8 @@ def main(**kwargs):
 
     assets = build_assets(api_token)
     
-    if assets == None or len(assets) == 0: # Explicit check for None or empty list
-        print("No assets retrieved from Orca Security or no valid assets with network interfaces found.")
+    if assets == None or len(assets) == 0:
+        print("No assets retrieved from Orca Security found.")
         return None
 
     print("Successfully processed {} assets for runZero import.".format(len(assets)))
