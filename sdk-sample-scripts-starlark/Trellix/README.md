@@ -9,7 +9,7 @@ This integration script connects to the FireEye Helix/HX API to retrieve host as
 
 ---
 
-## FireEye HX requirements
+## Trellix / FireEye HX requirements
 
 * **FireEye API Credentials:** A username and password with permissions to access the host/asset inventory API endpoint (`/hx/api/v3/hosts`).
 * **FireEye Base URL:** The base URL for your FireEye instance (e.g., `https://fireeye-hx.example.com`). This must be configured directly within the script's `FIREEYE_BASE_URL` constant.
@@ -18,7 +18,7 @@ This integration script connects to the FireEye Helix/HX API to retrieve host as
 
 ## Steps
 
-### FireEye HX Configuration
+### Trellix / FireEye HX Configuration
 
 1.  **Identify API Credentials:** Ensure you have a valid **username and password** with read access to the Host API endpoint.
 2.  **Configure the Script URL:** Open the script and replace the placeholder `XXXXXXXXXXXXXXX` in the `FIREEYE_BASE_URL` constant with your actual FireEye instance URL.
@@ -39,7 +39,7 @@ This integration script connects to the FireEye Helix/HX API to retrieve host as
     * Use a placeholder value like `foo` for `access_key` (unused in this integration).
 2.  **Create the Custom Integration**:
     * Go to [runZero Custom Integrations](https://console.runzero.com/custom-integrations/new).
-    * Add a **Name and Icon** for the integration (e.g., "FireEye HX").
+    * Add a **Name and Icon** for the integration (e.g., "Trellix").
     * Toggle `Enable custom integration script` and input the finalized script code.
     * Click `Validate` and then `Save`.
 3.  **Schedule the Integration Task**:
@@ -54,7 +54,7 @@ This integration script connects to the FireEye Helix/HX API to retrieve host as
 ### What's next?
 
 * The task will appear and kick off on the [tasks](https://console.runzero.com/tasks) page.
-* Assets in runZero will be created or updated based on **FireEye HX host inventory**.
+* Assets in runZero will be created or updated based on **Trellix host inventory**.
 * The script captures details like **hostname, OS, primary IP, and MAC address**.
 * Search for these assets in runZero using `custom_integration:fireeye hx`.
 
@@ -64,4 +64,4 @@ This integration script connects to the FireEye Helix/HX API to retrieve host as
 
 * The script uses **Basic Authentication** (encoded `username:password`) for API access.
 * The integration handles **pagination** automatically, iterating through all available pages of hosts from the `/hx/api/v3/hosts` endpoint.
-* All fields from the FireEye host record that are not explicitly mapped (like `_id`, `hostname`, `os`, `ip`, `mac`) are saved into runZero's **Custom Attributes**.
+* All fields from the Trellix / FireEye host record that are not explicitly mapped (like `_id`, `hostname`, `os`, `ip`, `mac`) are saved into runZero's **Custom Attributes**.
