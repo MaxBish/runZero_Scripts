@@ -56,7 +56,7 @@ This integration script connects to the FireEye Helix/HX API to retrieve host as
 * The task will appear and kick off on the [tasks](https://console.runzero.com/tasks) page.
 * Assets in runZero will be created or updated based on **Trellix host inventory**.
 * The script captures details like **hostname, OS, primary IP, and MAC address**.
-* Search for these assets in runZero using `custom_integration:fireeye hx`.
+* Search for these assets in runZero using `custom_integration:trellix`.
 
 ---
 
