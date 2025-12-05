@@ -26,7 +26,7 @@ This integration script connects to the FireEye Helix/HX API to retrieve host as
     > **Example (Must be updated in the script):**
     > ```python
     > # Constants for the FireEye API
-    > FIREEYE_BASE_URL = "[https://your-fireeye-instance.com](https://your-fireeye-instance.com)" 
+    > FIREEYE_BASE_URL = "https://your-fireeye-instance.com" 
     > HOSTS_ENDPOINT "{}/hx/api/v3/hosts".format(FIREEYE_BASE_URL)
     > ```
 
