@@ -1,4 +1,4 @@
-# Custom Integration: FireEye HX Asset Importer
+# Custom Integration: Trellix Asset Importer
 
 This integration script connects to the FireEye Helix/HX API to retrieve host asset information and import it into runZero as assets.
 
