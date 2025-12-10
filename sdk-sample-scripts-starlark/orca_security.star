@@ -21,6 +21,7 @@ def get_orca_assets(api_token):
     hasNextPage = True
     
     while hasNextPage:
+        ## New request body
         request_body = {
             "query": {
                 "models": ["Inventory"],
