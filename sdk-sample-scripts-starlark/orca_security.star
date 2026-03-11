@@ -1,190 +1,159 @@
+"""Module for importing assets from Orca Security API into runZero."""
+
 load('runzero.types', 'ImportAsset', 'NetworkInterface')
-load('json', json_encode='encode', json_decode='decode')
+load('json', json_decode='decode')
+load('http', http_get='get', 'url_encode')
 load('net', 'ip_address')
-load('http', http_post='post')
-load('uuid', 'new_uuid')
+load('flatten_json', 'flatten')
 
-ORCA_API_BASE_URL = "https://app.au.orcasecurity.io"
-# New Serving Layer API endpoint for queries
-ORCA_SERVING_LAYER_QUERY_ENDPOINT = "/api/serving-layer/query"
+# --- Configuration ---
+BASE_URL = "https://api.orcasecurity.io"
 
-def get_orca_assets(api_token):
-    """Retrieve assets from Orca Security Serving Layer API using POST /query endpoint."""
-    headers = {
-        "Authorization": "TOKEN " + api_token,
-        "Content-Type": "application/json"
-    }
-
-    all_assets = []
-    start_at_index = 0
-    limit = 10000
-    hasNextPage = True
+def build_network_interfaces(data_node):
+    """Extracts and validates IPv4, IPv6 addresses and MAC address from Orca asset data.
     
-    while hasNextPage:
-        ## New request body
-        request_body = {
-            "query": {
-                "models": ["Inventory"],
-                "type": "object_set"
-            },
-            "limit": limit,
-            "start_at_index": start_at_index,
-            "order_by[]": ["-OrcaScore"],
-            "select": [
-                "Name",
-                "CiSource",
-                "CloudAccount.Name",
-                "CloudAccount.CloudProvider",
-                "state.orca_score",
-                "RiskLevel",
-                "group_unique_id",
-                "UiUniqueField",
-                "IsInternetFacing",
-                "Tags",
-                "NewCategory",
-                "NewSubCategory",
-                "AssetUniqueId",
-                "ConsoleUrlLink",
-                "PrivateIps",
-                "PublicIps",
-                "DistributionName",
-                "DistributionVersion",
-                "Type",
-                "Status"
-            ],
-            "get_results_and_count": False,
-            "full_graph_fetch": {
-                "enabled": True
-            },
-            "use_cache": True,
-            "max_tier": 2,
-            "ui": True
-        }
+    Args:
+      data_node: A dictionary containing asset data with potential IP and MAC address information.
+    
+    Returns:
+      A list of NetworkInterface objects, or an empty list if no valid network data is found.
+    """
+    ip4s = []
+    ip6s = []
+    
+    # Safely handle both PascalCase and snake_case depending on how Orca formats the payload
+    public_ips = data_node.get('PublicIps') or data_node.get('public_ips') or []
+    private_ips = data_node.get('PrivateIps') or data_node.get('private_ips') or []
+    macs = data_node.get('MacAddresses') or data_node.get('mac_addresses') or []
+    
+    all_ips = []
+    for ip in public_ips:
+        if ip and ip not in all_ips:
+            all_ips.append(ip)
+            
+    for ip in private_ips:
+        if ip and ip not in all_ips:
+            all_ips.append(ip)
+
+    # Validate IP addresses
+    for ip in all_ips:
+        addr = ip_address(ip) 
+        if addr.version == 4:
+            ip4s.append(addr)
+        elif addr.version == 6:
+            ip6s.append(addr)
+            
+    # Safely grab the first MAC address if one exists
+    mac_val = macs[0] if type(macs) == "list" and len(macs) > 0 else None
+            
+    # If there is no network data at all, return an empty list
+    if not ip4s and not ip6s and not mac_val:
+        return []
         
-        print("Fetching page starting at index: {}".format(start_at_index))
-        response = http_post(
-            ORCA_API_BASE_URL + ORCA_SERVING_LAYER_QUERY_ENDPOINT,
-            headers=headers,
-            body=bytes(json_encode(request_body)),
-            timeout=600,
-            insecure_skip_verify=True
-        )
+    return [NetworkInterface(macAddress=mac_val, ipv4Addresses=ip4s, ipv6Addresses=ip6s)]
 
-        if response.status_code != 200:
-            print("Failed to fetch assets from Orca Security. Status: {}".format(response.status_code))
-            print("Response body: {}".format(response.body))
-            return all_assets
-
-        response_json = json_decode(response.body)
-        batch = response_json.get("data", [])
-
-        if not batch:
-            print("No more assets found.")
-            break
-        
-        all_assets.extend(batch)
-        start_at_index += len(batch)
-        
-        if len(batch) < limit:
-            print("Reached the last page. Total assets: {}".format(len(all_assets)))
-            hasNextPage = False
-            break
-
-    return all_assets
-
-def build_assets(api_token):
-    """Convert Orca Security asset data into runZero ImportAsset format."""
-    all_orca_assets = get_orca_assets(api_token)
-    assets_for_runzero = []
-
-    for asset in all_orca_assets:
-        print(asset)
-        asset_id = asset.get("AssetUniqueId", "") 
-        hostname = asset.get("Name", "")
-        os_name = asset.get("DistributionName", "")
-        os_version = asset.get("DistributionVersion", "")
-        risk_level = str(asset.get("RiskLevel", ""))
-        last_seen = asset.get("LastSeen", "")
-        
-        cloud_account = asset.get("CloudAccount", {})
-        cloud_provider = cloud_account.get("CloudProvider", "")
-        account_name = cloud_account.get("Name", "")
-        
-        private_ips_raw = asset.get("PrivateIps", [])
-        public_ips_raw = asset.get("PublicIps", [])
-        
-        all_ips = []
-        if type(private_ips_raw) == type([]):
-            all_ips.extend(private_ips_raw)
-        if type(public_ips_raw) == type([]):
-            all_ips.extend(public_ips_raw)
-
-        mac_address = ""
-
-        custom_attrs = {
-            "orca_cloud_provider": cloud_provider,
-            "orca_account_name": account_name,
-            "orca_service": asset.get("Type", ""),
-            "orca_resource_type": asset.get("NewCategory", "") if asset.get("NewCategory") != "" else asset.get("Type", ""),
-            "orca_status": asset.get("Status", ""),
-            "orca_risk_level": risk_level,
-            "orca_last_seen": last_seen,
-            "orca_tags": json_encode(asset.get("Tags", [])),
-            "orca_is_internet_facing": str(asset.get("IsInternetFacing", False)),
-            "orca_score": str(asset.get("OrcaScore", ""))
-        }
-
-        valid_ips_for_interface = []
-        for ip_val in all_ips:
-            if type(ip_val) == type("") and len(ip_val) > 0:
-                ip_obj = ip_address(ip_val)
-                if ip_obj:
-                    valid_ips_for_interface.append(ip_val)
-
-        network_interface = build_network_interface(valid_ips_for_interface, mac_address)
-
-        if network_interface != None:
-            assets_for_runzero.append(
-                ImportAsset(
-                    id=asset_id,
-                    networkInterfaces=[network_interface],
-                    hostnames=[hostname] if hostname != "" else [],
-                    os_version=os_version,
-                    os=os_name,
-                    customAttributes=custom_attrs
-                )
-            )
-    return assets_for_runzero
-
-def build_network_interface(ips, mac=None):
-    """Convert a list of IPs and an optional MAC address into a runZero NetworkInterface object."""
-    ipv4_addresses = []
-    ipv6_addresses = []
-
-    for ip_str_candidate in ips:
-        if type(ip_str_candidate) == type("") and len(ip_str_candidate) > 0 and ('.' in ip_str_candidate or ':' in ip_str_candidate):
-            ip_obj = ip_address(ip_str_candidate)
-            if ip_obj and ip_obj.version == 4:
-                ipv4_addresses.append(ip_obj)
-            elif ip_obj and ip_obj.version == 6:
-                ipv6_addresses.append(ip_obj)
-
-    if ipv4_addresses or ipv6_addresses:
-        return NetworkInterface(macAddress=mac, ipv4Addresses=ipv4_addresses, ipv6Addresses=ipv6_addresses)
-    return None
 
 def main(**kwargs):
-    """Main function to retrieve and return Orca Security asset data for runZero."""
+    """Retrieves assets from Orca Security API and maps them to runZero ImportAssets.
+    
+    Args:
+      **kwargs: Keyword arguments containing 'access_secret' with the Orca API token.
+    
+    Returns:
+      A list of ImportAsset objects mapped from Orca Security API response.
+    """
+    
+    # 1. Retrieve the Orca API Token from runZero credentials
     api_token = kwargs.get('access_secret')
     if not api_token:
-        print("Error: ORCA API token (access_secret) not provided in credentials.")
-        return None
+        print("Error: Missing Orca API Token in 'access_secret' field.")
+        return []
 
-    assets = build_assets(api_token)
+    # 2. Set up headers for Orca API authentication
+    headers = {
+        "Authorization": "Token {}".format(api_token),
+        "Accept": "application/json"
+    }
     
-    if assets == None or len(assets) == 0:
-        print("No assets retrieved from Orca Security found.")
-        return None
+    assets = []
+    next_page_token = None
 
-    print("Successfully processed {} assets for runZero import.".format(len(assets)))
+    params = {
+        "limit": "100",
+        "query": "vm"
+    }
+    
+    # 3. Handle Pagination (Starlark requires bounded for-loops instead of while loops)
+    for page in range(1000): # Safely loop up to 100,000 assets
+
+        if next_page_token:
+            params["next_page_token"] = next_page_token
+
+        encoded_params = url_encode(params)
+        
+        # Construct the paginated URL
+        url = "{}/api/sonar/query?{}".format(BASE_URL, encoded_params)
+
+        # Make the API request
+        response = http_get(url, headers=headers, timeout=300)
+
+        if response.status_code != 200:
+            print("Orca API Error: Received status code {} - {}".format(response.status_code, response.body))
+            break
+        
+        data = json_decode(response.body)
+        
+        # Extract the list of assets from the response
+        orca_items = data.get('data', [])
+        
+        # 4. Map Orca objects to runZero ImportAssets
+        for item in orca_items:
+            
+            print(item)
+            asset_id = item.get('asset_unique_id')
+            if not asset_id:
+                continue
+                
+            # Depending on the payload format, network/OS info is usually in 'data' or 'compute'
+            data_node = item.get('data')
+            
+            # Hostname fallback logic
+            hostname = data_node.get('Name')
+            hostnames = [hostname] if hostname else []
+
+            # Build network interfaces
+            net_ifs = build_network_interfaces(data_node)
+            
+            # Use flatten to automatically map ALL deep metadata to custom attributes
+            flat_data = flatten(data_node)
+            custom_attrs = {}
+            for key, value in flat_data.items():
+                if value != None:
+                    custom_attrs["{}".format(key)] = str(value)
+
+            # Add high-level identifiers
+            if item.get('cloud_provider'):
+                custom_attrs["cloud_provider"] = str(item.get('cloud_provider'))
+            if item.get('cloud_account_id'):
+                custom_attrs["cloud_account_id"] = str(item.get('cloud_account_id'))
+
+            # Create and append the ImportAsset
+            assets.append(ImportAsset(
+                id=asset_id,
+                hostnames=hostnames,
+                os=data_node.get('DistributionName') or data_node.get('os_distribution') or item.get('asset_distribution_name'),
+                osVersion=data_node.get('DistributionVersion') or data_node.get('os_version') or item.get('asset_distribution_version'),
+                networkInterfaces=net_ifs,
+                customAttributes=custom_attrs
+            ))
+            
+        # Check if there are more pages
+        hasNextPage = data.get('has_next_page', False)
+        next_page_token = data.get('next_page_token')
+        
+        # Break the bounded for-loop if we've reached the end
+        if not hasNextPage or not next_page_token:
+            break
+
+    print("Successfully mapped {} assets from Orca.".format(len(assets)))
     return assets
