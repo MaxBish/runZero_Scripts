@@ -20,7 +20,7 @@ headers = {
     'Accept': 'application/json'
 }
 
-search = 'type:desktop or type:laptop or type:workstation or type:"thin client"'
+search = '(type:laptop or type:desktop or type:workstation or type:"thin client") and not (source_count:=1 and custom_integration:Netskope)'
 
 def safe_date(ts_value):
     """Helper to safely convert timestamps to ISO strings."""
@@ -41,14 +41,15 @@ def main():
             'hostname', 'intune_username', 'intune_userPrincipalName', 
             'intune_serial_number', 'intune_id', 'intune_first_seen_timestamp', 'intune_last_seen_timestamp',
             'crowdstrike_lastInteractiveUser', 'crowdstrike_serial_number', 'crowdstrike_id', 'crowdstrike_lastSeen', 'crowdstrike_firstSeen', 'crowdstrike_agentVersion',
-            'absolute_username', 'absolute_serial_number', 'absolute_id', 'absolute_lastConnectedDateTimeUtc', 'absolute_agent_version',
+            'absolute_username', 'absolute_serial_number', 'absolute_id', 'absolute_lastConnectedDateTimeUtc', 'absolute_agent_version', 
+            'absolute_encryption_product', 'absolute_encryption_status', 'absolute_encryption_status_description', # <--- Added these 3
             'azure_ad_id', 'azure_ad_first_observed_timestamp', 'azure_ad_last_observed_timestamp',
-            'rapid7_id', 'rapid7_first_seen_timestamp', 'rapid7_last_seen_timestamp'
+            'rapid7_id', 'rapid7_first_seen_timestamp', 'rapid7_last_seen_timestamp', 'netskope_id', 'netskope_last_seenTS', 'netskope_serial_number'
         ]
         
         rows = []
 
-        for asset in data[:25]:
+        for asset in data:
             # Safely get foreign_attributes dict
             fa = asset.get('foreign_attributes', {})
             
@@ -93,9 +94,13 @@ def main():
                 absolute_id = a.get('id', " ")
                 absolute_lastConnectedDateTimeUtc = a.get('lastConnectedDateTimeUtc', " ")
                 absolute_agent_version = a.get('agentVersion', " ")
+                absolute_encryption_product = a.get('espInfoEncryptionProductName', " ")
+                absolute_encryption_status = a.get('espInfoEncryptionStatus', " ")
+                absolute_encryption_status_description = a.get('espInfoEncryptionStatusDescription', " ")
             else:
                 absolute_username = absolute_serial_number = absolute_id = " "
                 absolute_lastConnectedDateTimeUtc = absolute_agent_version = " "
+                absolute_encryption_product = absolute_encryption_status = absolute_encryption_status_description = " "
 
             # --- Azure AD Logic ---
             azure_list = fa.get('@azuread.dev', [])
@@ -119,14 +124,24 @@ def main():
                 rapid7_id = " "
                 rapid7_first_seen_timestamp = rapid7_last_seen_timestamp = " "
 
+            # --- Netskope Logic ---
+            n_list = fa.get('@netskope.custom', [])
+            if n_list:
+                n = n_list[0]
+                netskope_id = n.get('id', " ")
+                netskope_last_seenTS = n.get('netskopeTS', " ")
+                netskope_serial_number = n.get('serialNumber', " ")   
+            else:
+                netskope_id = netskopeTS = netskope_serial_number = " "
+
             # Assemble row
             row = [
                 hostname, intune_username, intune_userPrincipalName, 
                 intune_serial_number, intune_id, intune_first_seen_timestamp, intune_last_seen_timestamp,
                 crowdstrike_lastInteractiveUser, crowdstrike_serial_number, crowdstrike_id, crowdstrike_lastSeen, crowdstrike_firstSeen, crowdstrike_agentVersion,
-                absolute_username, absolute_serial_number, absolute_id, absolute_lastConnectedDateTimeUtc, absolute_agent_version,
+                absolute_username, absolute_serial_number, absolute_id, absolute_lastConnectedDateTimeUtc, absolute_agent_version, absolute_encryption_product, absolute_encryption_status, absolute_encryption_status_description,
                 azure_ad_id, azure_ad_first_observed_timestamp, azure_ad_last_observed_timestamp,
-                rapid7_id, rapid7_first_seen_timestamp, rapid7_last_seen_timestamp
+                rapid7_id, rapid7_first_seen_timestamp, rapid7_last_seen_timestamp, netskope_id, netskope_last_seenTS, netskope_serial_number
             ]
             rows.append(row)
 
