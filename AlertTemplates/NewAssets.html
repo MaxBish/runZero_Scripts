@@ -1,0 +1,34 @@
+<div class="preamble padding-md">
+  <h1>New Devices Detected</h1>
+  <p>Your runZero query identified {{query.count}} new device(s) on the network in the past 24 hours.</p>
+  {{#query.truncated}}
+  <p>The result set was truncated for this notification.</p>
+  {{/query.truncated}}
+</div>
+
+<div class="card padding-md">
+  <h3>Matched assets</h3>
+
+  {{#query.assets}}
+  <div class="section padding-sm">
+    <p><strong>Hostname:</strong> {{names}}</p>
+    <p>
+      <strong>IP address(es):</strong><br>
+      {{#addresses}}{{.}}<br>{{/addresses}}
+    </p>
+    <p><strong>Hardware:</strong> {{hw}}</p>
+    <p><strong>OS:</strong> {{os}}</p>
+    <p><strong>Device type:</strong> {{type}}</p>
+  </div>
+  {{/query.assets}}
+
+  {{^query.assets}}
+  <div class="section padding-sm">
+    <p>No new devices found in this timeframe.</p>
+  </div>
+  {{/query.assets}}
+
+  <p>
+    <a class="button size-lg" href="{{search.url}}">View results in runZero</a>
+  </p>
+</div>

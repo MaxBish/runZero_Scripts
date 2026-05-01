@@ -23,6 +23,7 @@ RUNZERO_ORG_ID = os.environ.get('RUNZERO_ORG_ID')
 RUNZERO_SITE_NAME = 'Primary'
 RUNZERO_CLIENT_ID = os.environ.get('RUNZERO_CLIENT_ID')
 RUNZERO_CLIENT_SECRET = os.environ.get('RUNZERO_CLIENT_SECRET')
+MAX_NETWORK_INTERFACES = 1
 
 def flatten_json(d: Any, parent_key: str = '', sep: str = '_') -> Dict[str, str]:
     """
@@ -146,6 +147,90 @@ def build_network_interface(ips: List[str], mac: str = None) -> NetworkInterface
         return NetworkInterface(macAddress=valid_mac, ipv4Addresses=ip4s, ipv6Addresses=ip6s)
     return None
 
+def parse_valid_ip(ip: str):
+    """Returns parsed IP object if usable for identity, otherwise None."""
+    if not ip:
+        return None
+    try:
+        ip_obj = ip_address(str(ip))
+        # Exclude non-routable/ephemeral IPs that commonly create false links.
+        if ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast or ip_obj.is_unspecified:
+            return None
+        return ip_obj
+    except Exception:
+        return None
+
+def score_adapter(adapter: Dict[str, Any], local_ip: str = None) -> int:
+    """Scores adapters so primary/stable interfaces are chosen first."""
+    score = 0
+    ip4_obj = parse_valid_ip(adapter.get("ipV4Address"))
+    ip6_obj = parse_valid_ip(adapter.get("ipV6Address"))
+    mac = format_mac(adapter.get("macAddress"))
+
+    if mac:
+        score += 10
+    if ip4_obj:
+        score += 8
+    if ip6_obj:
+        score += 4
+
+    if local_ip:
+        local_ip_obj = parse_valid_ip(local_ip)
+        if local_ip_obj and ((ip4_obj and ip4_obj == local_ip_obj) or (ip6_obj and ip6_obj == local_ip_obj)):
+            score += 25
+
+    return score
+
+def select_network_interfaces(device: Dict[str, Any], max_interfaces: int = MAX_NETWORK_INTERFACES) -> List[NetworkInterface]:
+    """Selects a small, high-confidence set of interfaces from Absolute data."""
+    selected: List[NetworkInterface] = []
+    seen_keys = set()
+    local_ip = device.get("localIp")
+    adapters = device.get("networkAdapters", [])
+
+    scored_adapters = sorted(
+        adapters,
+        key=lambda a: score_adapter(a, local_ip=local_ip),
+        reverse=True,
+    )
+
+    for adapter in scored_adapters:
+        ip_candidates = []
+        ip4_obj = parse_valid_ip(adapter.get("ipV4Address"))
+        ip6_obj = parse_valid_ip(adapter.get("ipV6Address"))
+        if ip4_obj:
+            ip_candidates.append(str(ip4_obj))
+        if ip6_obj:
+            ip_candidates.append(str(ip6_obj))
+
+        iface = build_network_interface(ips=ip_candidates, mac=adapter.get("macAddress"))
+        if not iface:
+            continue
+
+        iface_key = (
+            str(iface.macAddress or ""),
+            tuple(sorted(str(ip) for ip in (iface.ipv4Addresses or []))),
+            tuple(sorted(str(ip) for ip in (iface.ipv6Addresses or []))),
+        )
+
+        if iface_key in seen_keys:
+            continue
+
+        seen_keys.add(iface_key)
+        selected.append(iface)
+
+        if len(selected) >= max_interfaces:
+            break
+
+    if not selected:
+        local_ip_obj = parse_valid_ip(local_ip)
+        if local_ip_obj:
+            fallback = build_network_interface(ips=[str(local_ip_obj)])
+            if fallback:
+                selected.append(fallback)
+
+    return selected
+
 def build_runzero_assets(devices: List[Dict[str, Any]]) -> List[ImportAsset]:
     """Maps Absolute data to runZero assets with epoch timestamp conversion."""
     assets = []
@@ -156,18 +241,7 @@ def build_runzero_assets(devices: List[Dict[str, Any]]) -> List[ImportAsset]:
     }
 
     for d in devices:
-        networks = []
-        
-        # 1. Map Network Interfaces
-        adapters = d.get("networkAdapters", [])
-        for adapter in adapters:
-            ips = [ip for ip in [adapter.get("ipV4Address"), adapter.get("ipV6Address")] if ip]
-            interface = build_network_interface(ips=ips, mac=adapter.get("macAddress"))
-            if interface: networks.append(interface)
-        
-        if not networks and d.get("localIp"):
-            interface = build_network_interface(ips=[str(d.get("localIp"))])
-            if interface: networks.append(interface)
+        networks = select_network_interfaces(d)
 
         # 2. Flatten and Filter Custom Attributes
         raw_flat = flatten_json(d)
