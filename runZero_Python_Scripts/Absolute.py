@@ -2,16 +2,21 @@
 import time
 import json
 import os
+import warnings
 import requests
 import re
 from datetime import datetime, timedelta, timezone
 from ipaddress import ip_address
 from typing import List, Any, Dict
 
+from authlib.deprecate import AuthlibDeprecationWarning
+
+warnings.filterwarnings("ignore", category=AuthlibDeprecationWarning)
+
 import runzero
 from runzero.api import CustomAssets, Sites, CustomIntegrationsAdmin
 from runzero.types import ImportAsset, NetworkInterface, ImportTask, IPv4Address, IPv6Address
-from authlib.jose import JsonWebSignature
+from authlib.jose.rfc7515 import JsonWebSignature
 
 # --- Absolute Credentials ---
 ABSOLUTE_TOKEN_ID = os.environ.get('ABSOLUTE_TOKEN_ID')
@@ -62,9 +67,18 @@ def format_mac(mac: str) -> str:
 
 def get_absolute_jws(method: str, uri: str, query_string: str, payload: Dict) -> str:
     """Constructs the JWS string required for Absolute API v3 authentication."""
+    if not isinstance(ABSOLUTE_TOKEN_ID, str) or not ABSOLUTE_TOKEN_ID.strip():
+        raise RuntimeError(
+            "ABSOLUTE_TOKEN_ID is missing. Load your env first (source environ.env)."
+        )
+    if not isinstance(ABSOLUTE_TOKEN_SECRET, str) or not ABSOLUTE_TOKEN_SECRET.strip():
+        raise RuntimeError(
+            "ABSOLUTE_TOKEN_SECRET is missing. Load your env first (source environ.env)."
+        )
+
     headers = {
         "alg": "HS256", 
-        "kid": ABSOLUTE_TOKEN_ID,
+        "kid": ABSOLUTE_TOKEN_ID.strip(),
         "method": method,
         "content-type": "application/json",
         "uri": uri,
@@ -73,7 +87,14 @@ def get_absolute_jws(method: str, uri: str, query_string: str, payload: Dict) ->
     }
     wrapped_payload = json.dumps({"data": payload}) if payload else json.dumps({})
     jws = JsonWebSignature()
-    return jws.serialize_compact(headers, wrapped_payload, ABSOLUTE_TOKEN_SECRET)
+    token = jws.serialize_compact(headers, wrapped_payload, ABSOLUTE_TOKEN_SECRET.strip())
+    if isinstance(token, bytes):
+        return token.decode("utf-8")
+    if isinstance(token, bytearray):
+        return bytes(token).decode("utf-8")
+    if isinstance(token, memoryview):
+        return token.tobytes().decode("utf-8")
+    return str(token)
 
 def fetch_all_absolute_devices() -> List[Dict[str, Any]]:
     """Retrieves active devices seen within the last 3 days using comprehensive field selection."""
