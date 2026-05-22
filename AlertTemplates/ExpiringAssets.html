@@ -1,0 +1,37 @@
+<div class="preamble padding-md">
+  <h1 class="color-yellow">Assets About to Age Out</h1>
+  <p>Your runZero query identified <strong>{{query.count}}</strong> asset(s) that are 29 days old and are scheduled to age out of the inventory soon.</p>
+  
+  {{#query.truncated}}
+  <p>The result set was truncated for this notification.</p>
+  {{/query.truncated}}
+</div>
+
+<div class="card padding-md">
+  <h3>Matched assets</h3>
+
+  {{#query.assets}}
+  <div class="section padding-sm">
+    <p><strong>Hostname:</strong> {{names}}</p>
+    <p>
+      <strong>IP address(es):</strong><br>
+      {{#addresses}}{{.}}<br>{{/addresses}}
+    </p>
+    <p><strong>Hardware:</strong> {{hw}}</p>
+    <p><strong>OS:</strong> {{os}}</p>
+    <p><strong>Device type:</strong> {{type}}</p>
+  </div>
+  {{/query.assets}}
+
+  {{^query.assets}}
+  <div class="section padding-sm">
+    <p>No assets are currently hitting the 29-day threshold.</p>
+  </div>
+  {{/query.assets}}
+
+  <p><em>If these devices are still active, they may need to be scanned. Otherwise, no action is required and they will be removed at the 30-day mark.</em></p>
+
+  <p>
+    <a class="button size-lg" href="{{search.url}}">View results in runZero</a>
+  </p>
+</div>
