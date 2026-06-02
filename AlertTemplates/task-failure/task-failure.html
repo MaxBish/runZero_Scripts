@@ -1,0 +1,27 @@
+<div class="preamble padding-md">
+  <h1 class="color-yellow">Task Failure Alert</h1>
+  <p>The runZero task <strong>{{task.name}}</strong> failed to complete successfully.</p>
+</div>
+
+<div class="card padding-md">
+  <h3>Task details</h3>
+
+  <div class="section padding-sm">
+    <p><strong>Task name:</strong> {{task.name}}</p>
+    <p><strong>Organization:</strong> {{organization.name}}</p>
+    <p><strong>Task type:</strong> {{task.type}}</p>
+    <p><strong>Status:</strong> {{task.status}}</p>
+    <p><strong>Started at:</strong> {{task.start_time}}</p>
+    <p><strong>Created by:</strong> {{task.created_by}}</p>
+    <p class="preserve-newlines">
+      <strong>Error message:</strong><br>
+      {{task.error}}
+    </p>
+  </div>
+
+  <p><em>Please review the task logs in the console to identify the root cause of the failure.</em></p>
+
+  <p>
+    <a class="button size-lg" href="{{task.url}}">View task in runZero</a>
+  </p>
+</div>
