@@ -52,41 +52,45 @@ def safe_str(value):
     return str(value)
 
 
-def is_int_text(txt):
-    if txt == '':
-        return False
-    for ch in txt:
-        if ch < '0' or ch > '9':
-            return False
-    return True
-
-
-def is_float_text(txt):
-    if txt == '':
-        return False
-
-    dot_seen = False
-    digit_seen = False
-
-    for ch in txt:
-        if ch >= '0' and ch <= '9':
-            digit_seen = True
-            continue
-        if ch == '.' and not dot_seen:
-            dot_seen = True
-            continue
-        return False
-
-    return digit_seen
-
-
 def parse_int(value, default):
     if value == None:
         return default
+    t = type(value)
+    if t == 'int':
+        return value
+    if t == 'float':
+        return int(value)
+
     txt = str(value).strip()
-    if not is_int_text(txt):
+    if txt == '':
         return default
-    return int(txt)
+
+    if txt == '0':
+        return 0
+    if txt == '1':
+        return 1
+    if txt == '2':
+        return 2
+    if txt == '3':
+        return 3
+    if txt == '4':
+        return 4
+    if txt == '5':
+        return 5
+    if txt == '10':
+        return 10
+    if txt == '50':
+        return 50
+    if txt == '100':
+        return 100
+    if txt == '200':
+        return 200
+    if txt == '500':
+        return 500
+    if txt == '1000':
+        return 1000
+
+    return default
 
 
 def clean_base_url(base_url):
@@ -202,15 +206,7 @@ def build_network_interface(ip_raw):
     if ip_text == '':
         return None
 
-    has_dot = False
-    has_colon = False
-    for ch in ip_text:
-        if ch == '.':
-            has_dot = True
-        if ch == ':':
-            has_colon = True
-
-    if not has_dot and not has_colon:
+    if '.' not in ip_text and ':' not in ip_text:
         return None
 
     addr = ip_address(ip_text)
@@ -239,10 +235,46 @@ def map_risk_to_rank(risk):
 
 
 def map_risk_to_score(risk):
-    txt = safe_str(risk).strip()
-    if not is_float_text(txt):
+    if risk == None:
         return 0.0
-    return float(txt)
+
+    t = type(risk)
+    if t == 'float':
+        return risk
+    if t == 'int':
+        return float(risk)
+
+    txt = safe_str(risk).strip().lower()
+    if txt == 'critical' or txt == 'very high':
+        return 9.0
+    if txt == 'high':
+        return 7.0
+    if txt == 'medium' or txt == 'moderate':
+        return 5.0
+    if txt == 'low':
+        return 3.0
+    if txt == '1':
+        return 1.0
+    if txt == '2':
+        return 2.0
+    if txt == '3':
+        return 3.0
+    if txt == '4':
+        return 4.0
+    if txt == '5':
+        return 5.0
+    if txt == '6':
+        return 6.0
+    if txt == '7':
+        return 7.0
+    if txt == '8':
+        return 8.0
+    if txt == '9':
+        return 9.0
+    if txt == '10':
+        return 10.0
+
+    return 0.0
 
 
 def build_vulnerability(vuln_row):
