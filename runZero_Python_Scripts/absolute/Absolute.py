@@ -28,7 +28,34 @@ RUNZERO_ORG_ID = os.environ.get('RUNZERO_ORG_ID')
 RUNZERO_SITE_NAME = 'Primary'
 RUNZERO_CLIENT_ID = os.environ.get('RUNZERO_CLIENT_ID')
 RUNZERO_CLIENT_SECRET = os.environ.get('RUNZERO_CLIENT_SECRET')
-MAX_NETWORK_INTERFACES = 1
+MAX_NETWORK_INTERFACES = 2
+
+VPN_TUNNEL_HINTS = (
+    "vpn",
+    "wireguard",
+    "wg",
+    "utun",
+    "tun",
+    "tap",
+    "ppp",
+    "ipsec",
+    "openvpn",
+    "anyconnect",
+    "globalprotect",
+    "zscaler",
+    "tailscale",
+    "zerotier",
+)
+
+VIRTUAL_ADAPTER_HINTS = (
+    "virtual",
+    "vmware",
+    "virtualbox",
+    "hyper-v",
+    "veth",
+    "docker",
+    "loopback",
+)
 
 def flatten_json(d: Any, parent_key: str = '', sep: str = '_') -> Dict[str, str]:
     """
@@ -97,13 +124,13 @@ def get_absolute_jws(method: str, uri: str, query_string: str, payload: Dict) ->
     return str(token)
 
 def fetch_all_absolute_devices() -> List[Dict[str, Any]]:
-    """Retrieves active devices seen within the last 3 days using comprehensive field selection."""
+    """Retrieves active devices seen within the last 60 days using comprehensive field selection."""
     all_devices = []
     next_page_token = None
     page_size = 500 
     uri = "/v3/reporting/devices"
     
-    three_days_ago = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat().replace('+00:00', 'Z')
+    sixty_days_ago = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat().replace('+00:00', 'Z')
     
     # Updated to request every relevant top-level object in the Absolute schema
     selected_fields = (
@@ -115,12 +142,12 @@ def fetch_all_absolute_devices() -> List[Dict[str, Any]]:
         "avpInfo,ctesVersion,agentVersion,pbVerErrorCodes, fullSystemName"
     )
     
-    print(f"Beginning data retrieval from Absolute (Active since: {three_days_ago})...")
+    print(f"Beginning data retrieval from Absolute (Active since: {sixty_days_ago})...")
     while True:
         query_parts = [
             f"pageSize={page_size}", 
             "agentStatus=A",
-            f"lastConnectedDateTimeUtcFromInclusive={three_days_ago}",
+            f"lastConnectedDateTimeUtcFromInclusive={sixty_days_ago}",
             f"select={selected_fields}"
         ]
         if next_page_token:
@@ -165,7 +192,7 @@ def build_network_interface(ips: List[str], mac: str = None) -> NetworkInterface
         except Exception: continue
             
     if valid_mac or ip4s or ip6s:
-        return NetworkInterface(macAddress=valid_mac, ipv4Addresses=ip4s, ipv6Addresses=ip6s)
+        return NetworkInterface(mac_address=valid_mac, ipv4_addresses=ip4s, ipv6_addresses=ip6s)
     return None
 
 def parse_valid_ip(ip: str):
@@ -180,6 +207,32 @@ def parse_valid_ip(ip: str):
         return ip_obj
     except Exception:
         return None
+
+def adapter_descriptor(adapter: Dict[str, Any]) -> str:
+    """Builds a searchable descriptor from adapter fields."""
+    descriptor_fields = [
+        "name",
+        "adapterName",
+        "deviceName",
+        "description",
+        "networkName",
+        "connectionType",
+        "interfaceType",
+        "driverName",
+        "serviceName",
+    ]
+    parts = [str(adapter.get(field) or "") for field in descriptor_fields]
+    return " ".join(parts).lower()
+
+def is_excluded_adapter(adapter: Dict[str, Any]) -> bool:
+    """Drops VPN/tunnel-style adapters to avoid noisy identity linkage."""
+    descriptor = adapter_descriptor(adapter)
+    return any(hint in descriptor for hint in VPN_TUNNEL_HINTS)
+
+def is_likely_virtual_adapter(adapter: Dict[str, Any]) -> bool:
+    """Flags likely virtual adapters so they rank below physical NICs."""
+    descriptor = adapter_descriptor(adapter)
+    return any(hint in descriptor for hint in VIRTUAL_ADAPTER_HINTS)
 
 def score_adapter(adapter: Dict[str, Any], local_ip: str = None) -> int:
     """Scores adapters so primary/stable interfaces are chosen first."""
@@ -200,6 +253,9 @@ def score_adapter(adapter: Dict[str, Any], local_ip: str = None) -> int:
         if local_ip_obj and ((ip4_obj and ip4_obj == local_ip_obj) or (ip6_obj and ip6_obj == local_ip_obj)):
             score += 25
 
+    if is_likely_virtual_adapter(adapter):
+        score -= 5
+
     return score
 
 def select_network_interfaces(device: Dict[str, Any], max_interfaces: int = MAX_NETWORK_INTERFACES) -> List[NetworkInterface]:
@@ -207,7 +263,11 @@ def select_network_interfaces(device: Dict[str, Any], max_interfaces: int = MAX_
     selected: List[NetworkInterface] = []
     seen_keys = set()
     local_ip = device.get("localIp")
-    adapters = device.get("networkAdapters", [])
+    adapters = [
+        adapter
+        for adapter in device.get("networkAdapters", [])
+        if not is_excluded_adapter(adapter)
+    ]
 
     scored_adapters = sorted(
         adapters,
@@ -229,9 +289,9 @@ def select_network_interfaces(device: Dict[str, Any], max_interfaces: int = MAX_
             continue
 
         iface_key = (
-            str(iface.macAddress or ""),
-            tuple(sorted(str(ip) for ip in (iface.ipv4Addresses or []))),
-            tuple(sorted(str(ip) for ip in (iface.ipv6Addresses or []))),
+            str(iface.mac_address or ""),
+            tuple(sorted(str(ip) for ip in (iface.ipv4_addresses or []))),
+            tuple(sorted(str(ip) for ip in (iface.ipv6_addresses or []))),
         )
 
         if iface_key in seen_keys:
@@ -315,6 +375,20 @@ if __name__ == "__main__":
         my_asset_source = custom_source_mgr.get(name="Absolute")
         if not my_asset_source:
             my_asset_source = custom_source_mgr.create(name="Absolute")
+
+        # Print integration metadata so stale/deactivated ID issues are visible in logs.
+        integration_debug = {
+            "id": str(getattr(my_asset_source, "id", "")),
+            "name": str(getattr(my_asset_source, "name", "")),
+            "org_id": str(getattr(my_asset_source, "org_id", "")),
+            "organization_id": str(getattr(my_asset_source, "organization_id", "")),
+            "active": str(getattr(my_asset_source, "active", "")),
+            "enabled": str(getattr(my_asset_source, "enabled", "")),
+            "archived": str(getattr(my_asset_source, "archived", "")),
+            "deleted": str(getattr(my_asset_source, "deleted", "")),
+            "status": str(getattr(my_asset_source, "status", "")),
+        }
+        print(f"Resolved custom integration: {integration_debug}")
         
         site_mgr = Sites(c)
         site = site_mgr.get(RUNZERO_ORG_ID, RUNZERO_SITE_NAME)
@@ -325,6 +399,6 @@ if __name__ == "__main__":
             site_id=site.id,
             custom_integration_id=my_asset_source.id, 
             assets=runzero_assets,
-            task_info=ImportTask(name="Absolute Inventory Full Attribute Sync"),
+            task_info=ImportTask(name="Absolute Inventory Sync", description="Absolute import")
         )
         print(f"Successfully submitted {len(runzero_assets)} assets with full attributes to runZero.")
