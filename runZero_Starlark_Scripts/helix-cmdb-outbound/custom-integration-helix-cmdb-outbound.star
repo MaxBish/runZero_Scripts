@@ -221,7 +221,7 @@ CONFIG = {
 }
 
 load('json', json_encode='encode', json_decode='decode')
-load('http', http_get='get', http_post='post', 'url_encode')
+load('http', http_get='get', http_post='post', 'url_encode', 'basic')
 load('kwargs', 'get_bool', 'get_http_options', 'get_int', 'get_string', 'require')
 
 RUNZERO_EXPORT_PATH = '/api/v1.0/export/org/assets.json'
@@ -677,17 +677,19 @@ def _instance_id(instance):
     return ''
 
 def _request_helix_access_token(config, client_id, client_secret, http_options):
-    token_url = _join_url(config.get('helix_api_base', ''), config.get('auth_login_path', '/api/rx/authentication/oauth/token'))
+    auth_path = config.get('auth_login_path', '')
+    if auth_path == '' or auth_path == '/api/jwt/login':
+        auth_path = '/api/rx/authentication/oauth/token'
+    token_url = _join_url(config.get('helix_api_base', ''), auth_path)
     response = http_post(
         url=token_url,
         headers={
             'Accept': 'application/json',
             'Content-Type': 'application/x-www-form-urlencoded',
+            'Authorization': basic(client_id, client_secret),
         },
         body=bytes(url_encode({
             'grant_type': 'client_credentials',
-            'client_id': client_id,
-            'client_secret': client_secret,
         })),
         **http_options
     )
