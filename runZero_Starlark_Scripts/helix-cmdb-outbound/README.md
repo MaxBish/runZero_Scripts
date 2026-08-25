@@ -1,127 +1,54 @@
-# runZero to BMC Helix CMDB (Starter)
+# Custom Integration: BMC Helix CMDB Outbound
 
-This is a starter outbound custom integration script that exports assets from runZero and upserts CIs into BMC Helix CMDB.
+This outbound integration exports runZero assets and upserts CI records into
+BMC Helix CMDB using the v2 `CONFIG` model.
 
-Current matching and write behavior:
-- Primary match: hostname/FQDN
-- Secondary fallback match: serial number
-- If exactly one match is found: update existing CI
-- If no match is found: create net-new CI
-- If multiple matches are found: mark as failed and log conflict
+## Requirements
 
-Current class routing behavior:
-- `helix_class_routing=true` (default) routes each asset to one or more Helix classes based on available runZero data:
-  - `BMC_ComputerSystem` (always)
-  - `BMC_OperatingSystem` (when OS fields exist)
-  - `BMC_IPEndpoint` (when IPs exist)
-  - `BMC_LANEndpoint` (when MACs exist)
-  - `BMC_HardwareSystemComponent` (when serial/manufacturer/model exists)
-- `helix_class_name` can force a single class; when routing is enabled, that class still requires matching data shape.
-- `helix_class_routing=false` enforces single-class mode.
+- Superuser access to Custom Integrations in runZero.
+- A runZero export token with access to the org asset export endpoint.
+- Helix API credentials with permission to authenticate and create or update CI records.
 
-## Important notes
+## Parameters
 
-- This starter uses placeholder Helix endpoint paths and field mappings.
-- Update endpoint templates, class/dataset values, and mapping table before production use.
-- Keep dry-run enabled until your Helix sandbox confirms update and create paths.
+- `runzero_export_token`: Bearer token used to export runZero assets.
+- `helix_client_id`: Helix OAuth client ID.
+- `helix_client_secret`: Helix OAuth client secret.
+- `runzero_console_url`: runZero console base URL. Default: `https://console.runzero.com`.
+- `runzero_search`: runZero export filter. Default: `alive:t`.
+- `helix_api_base`: Helix API base URL.
+- `helix_dataset_id`: Helix dataset ID. Default: `BMC.ASSET.SANDBOX`.
+- `auth_login_path`, `cmdb_query_path`, `cmdb_create_path`, `cmdb_update_path`, `ast_attributes_path`: override API paths when needed. The default auth path is `/api/rx/authentication/oauth/token`.
+- `post_ast_attributes`: optionally create `AST:Attributes` linkage records after upserts.
+- `rz_http_*` / `rz_tls_*`: runZero HTTP and TLS options for export calls.
+- `helix_http_*` / `helix_tls_*`: Helix HTTP and TLS options for destination API calls.
 
-## runZero requirements
+## Processing model
 
-- Superuser access to Custom Integrations in runZero
-- Hosted explorer to execute the task
-- Export token (ET) or equivalent token with access to export endpoint
+1. Export assets from runZero with the configured search filter.
+2. Authenticate to Helix with a form-encoded OAuth `client_credentials` request.
+3. Route each asset into the relevant Helix classes based on available fields.
+4. Build class payloads from the embedded spreadsheet-derived mappings.
+5. Upsert by hostname first, then serial number.
 
-## Credential and kwargs layout
+## Match behavior
 
-Use a Custom Script Secret credential and pass values via kwargs.
+- One Helix match: update the existing instance.
+- Zero Helix matches: create a new instance.
+- Multiple Helix matches: log a conflict and mark the record as failed.
 
-Required for runZero export:
-- runzero_export_token (or fallback access_secret)
-- runzero_console_url (optional, defaults to https://console.runzero.com)
-- runzero_search (optional runZero search query)
+## Mapping source
 
-Required for Helix live mode:
-- helix_api_base
-- helix_client_id
-- helix_client_secret
-- helix_class_name
-- helix_dataset_id
+- `CLASS_FIELD_MAPPINGS` contains spreadsheet-derived field mappings.
+- `LIFECYCLE_TO_BMC_STATUS` contains lifecycle-to-status translations.
 
-Optional endpoint overrides:
-- helix_oauth_token_path (default /api/oauth2/token)
-- helix_cmdb_query_path (default /api/cmdb/v1/instance/{className})
-- helix_cmdb_create_path (default /api/cmdb/v1/instance/{className})
-- helix_cmdb_update_path (default /api/cmdb/v1/instance/{className}/{instanceId})
+## Notes
 
-Optional runtime toggle:
-- dry_run=true|false (default true)
-- helix_class_routing=true|false (default true)
+- This is an outbound integration; it performs remote writes and returns `None`.
+- The script currently routes assets into the default five Helix classes embedded in the script.
+- `/api/jwt/login` is a username/password JWT endpoint and is not compatible with the configured OAuth client ID and secret. Use the default OAuth path unless the Helix deployment provides a compatible client-credentials endpoint.
 
-Optional defaults for mapped values:
-- helix_company
-- helix_supported_default (default Yes)
-- helix_primary_capability (default Server)
-- helix_ip_category (default Network)
-- helix_os_category (default Software)
-- helix_lan_category (default Network)
+## References
 
-## Mapping table
-
-The script now includes extracted sheet-based mappings and lifecycle translation from runzero_helix_mapping.xlsx:
-- class maps in `CLASS_FIELD_MAPPINGS`
-- lifecycle map in `LIFECYCLE_TO_BMC_STATUS`
-
-Edit `GLOBAL_MAPPING_FIELDS` and `CLASS_FIELD_MAPPINGS` in custom-integration-helix-cmdb-outbound.star to align with your final workbook decisions.
-
-Example format:
-- 'runzero_field_name': 'HelixAttributeName'
-
-Recommended first fields:
-- hostname/FQDN equivalents
-- serial number
-- manufacturer/model
-- OS and OS version
-- any reconciliation or source tracking attributes required by your Helix class
-
-Lifecycle translation currently implemented:
-- Planned for introduction -> Reserved
-- Implemented -> Being Assembled
-- Live in production -> Deployed
-- Planned to remove -> Down
-- Decommissioned -> End of Life
-
-## How to run locally with runZero CLI
-
-Dry-run example:
-
-runzero script --filename custom-integration-helix-cmdb-outbound.star \
-  --kwargs runzero_export_token=<RUNZERO_EXPORT_TOKEN> \
-  --kwargs runzero_console_url=https://console.runzero.com \
-  --kwargs runzero_search='alive:t' \
-  --kwargs helix_api_base=https://<HELIX_HOST> \
-  --kwargs helix_client_id=<CLIENT_ID> \
-  --kwargs helix_client_secret=<CLIENT_SECRET> \
-  --kwargs helix_class_name=<CLASS_NAME> \
-  --kwargs helix_dataset_id=<DATASET_ID> \
-  --kwargs dry_run=true
-
-Live-mode example:
-
-runzero script --filename custom-integration-helix-cmdb-outbound.star \
-  --kwargs runzero_export_token=<RUNZERO_EXPORT_TOKEN> \
-  --kwargs runzero_console_url=https://console.runzero.com \
-  --kwargs runzero_search='alive:t' \
-  --kwargs helix_api_base=https://<HELIX_HOST> \
-  --kwargs helix_client_id=<CLIENT_ID> \
-  --kwargs helix_client_secret=<CLIENT_SECRET> \
-  --kwargs helix_class_name=<CLASS_NAME> \
-  --kwargs helix_dataset_id=<DATASET_ID> \
-  --kwargs dry_run=false
-
-## Next hardening items
-
-- Replace placeholder endpoint templates with your tenant-confirmed Helix API paths.
-- Confirm query parameter names for hostname and serial filters in your Helix API.
-- Add retry/backoff for transient failures and rate limits.
-- Add batch controls for very large exports.
-- Add dead-letter output for conflict/failed writes.
+- https://help.runzero.com/docs/custom-integration-scripts/
+- https://help.runzero.com/docs/custom-integration-starlark-libraries/

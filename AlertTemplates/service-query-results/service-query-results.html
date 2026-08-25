@@ -1,0 +1,37 @@
+<div class="preamble padding-md">
+  <h1 class="color-yellow">Potentially Risky Services Found</h1>
+  <p>Your runZero query identified <strong>{{query.count}}</strong> service match(es) that may require investigation.</p>
+
+  {{#query.truncated}}
+  <p>The result set was truncated for this notification.</p>
+  {{/query.truncated}}
+</div>
+
+<div class="card padding-md">
+  <h3>Matched services</h3>
+
+  {{#query.services}}
+  <div class="section padding-sm">
+    <p><strong>Service endpoint:</strong> {{address}}:{{port}} ({{transport}})</p>
+    <p><strong>Protocol:</strong> {{protocol}}</p>
+    <p><strong>Summary:</strong> {{summary}}</p>
+    <p><strong>Organization / Site:</strong> {{organization}} / {{site}}</p>
+    <p><strong>Asset names:</strong> {{names}}</p>
+    <p><strong>Asset OS:</strong> {{os}}</p>
+    <p><strong>Asset hardware:</strong> {{hw}}</p>
+    <p><strong>Asset type:</strong> {{type}}</p>
+  </div>
+  {{/query.services}}
+
+  {{^query.services}}
+  <div class="section padding-sm">
+    <p>No matching services were included in this alert payload.</p>
+  </div>
+  {{/query.services}}
+
+  <p><em>Review the matched services to validate exposure and determine remediation priority.</em></p>
+
+  <p>
+    <a class="button size-lg" href="{{search.url}}">View results in runZero</a>
+  </p>
+</div>
