@@ -17,3 +17,6 @@ environ.env
 
 # Local output files
 *.log
+
+# Private customer scripts and exports
+customer_scripts/

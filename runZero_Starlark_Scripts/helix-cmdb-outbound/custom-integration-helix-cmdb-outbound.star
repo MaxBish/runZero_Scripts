@@ -3,7 +3,7 @@ CONFIG = {
     "name": "BMC Helix CMDB Outbound",
     "type": "outbound",
     "description": "Exports runZero assets and upserts CI records into BMC Helix CMDB.",
-    "version": "26072000",
+    "version": "26082600",
     "minVersion": "5.1.0",
     "params": [
         {
@@ -22,6 +22,32 @@ CONFIG = {
             "key": "helix_client_secret",
             "label": "Helix client secret",
             "type": "secret",
+            "required": True,
+        },
+        {
+            "key": "helix_jwt_private_key",
+            "label": "runZero console TLS private key (PEM, unencrypted, used to sign the JWT)",
+            "type": "secret",
+            "required": True,
+        },
+        {
+            "key": "helix_jwt_algorithm",
+            "label": "Helix JWT signing algorithm",
+            "type": "string",
+            "required": False,
+            "default": "RS256",
+        },
+        {
+            "key": "helix_jwt_subject",
+            "label": "Helix JWT subject (RSSO login ID)",
+            "type": "string",
+            "required": False,
+            "default": "runzero-apiaccess",
+        },
+        {
+            "key": "helix_token_audience",
+            "label": "Helix RSSO application domain (token request audience)",
+            "type": "string",
             "required": True,
         },
         {
@@ -45,6 +71,13 @@ CONFIG = {
             "required": True,
         },
         {
+            "key": "helix_auth_base",
+            "label": "Helix SSO base URL",
+            "type": "url",
+            "required": False,
+            "default": "https://au-rsso1-dev.onbmc.com/rsso",
+        },
+        {
             "key": "helix_dataset_id",
             "label": "Helix dataset ID",
             "type": "string",
@@ -56,28 +89,28 @@ CONFIG = {
             "label": "Helix auth login path",
             "type": "string",
             "required": False,
-            "default": "/api/rx/authentication/oauth/token",
+            "default": "/oauth2/v1.1/token",
         },
         {
             "key": "cmdb_query_path",
             "label": "CMDB query path",
             "type": "string",
             "required": False,
-            "default": "/api/cmdb/v1/instance/{datasetId}/{classPath}",
+            "default": "/api/cmdb/v1.0/instance/{datasetId}/{classPath}",
         },
         {
             "key": "cmdb_create_path",
             "label": "CMDB create path",
             "type": "string",
             "required": False,
-            "default": "/api/cmdb/v1/instance/{datasetId}/{classPath}",
+            "default": "/api/cmdb/v1.0/instance/{datasetId}/{classPath}",
         },
         {
             "key": "cmdb_update_path",
             "label": "CMDB update path",
             "type": "string",
             "required": False,
-            "default": "/api/cmdb/v1/instance/{datasetId}/{classPath}/{instanceId}",
+            "default": "/api/cmdb/v1.0/instance/{datasetId}/{classPath}/{instanceId}",
         },
         {
             "key": "ast_attributes_path",
@@ -222,6 +255,9 @@ CONFIG = {
 
 load('json', json_encode='encode', json_decode='decode')
 load('http', http_get='get', http_post='post', 'url_encode', 'basic')
+load('jwt', jwt_encode='encode')
+load('time', time_now='now')
+load('crypto', 'random_hex')
 load('kwargs', 'get_bool', 'get_http_options', 'get_int', 'get_string', 'require')
 
 RUNZERO_EXPORT_PATH = '/api/v1.0/export/org/assets.json'
@@ -323,6 +359,15 @@ def _safe_json_decode(body):
     if payload_text == '':
         return None
     return json_decode(payload_text)
+
+def _response_header(response, name):
+    headers = response.headers if response else {}
+    if type(headers) != 'dict':
+        return ''
+    value = headers.get(name)
+    if type(value) == 'list' and len(value) > 0:
+        return _text(value[0]).strip()
+    return _text(value).strip()
 
 def _join_url(base_url, path):
     return base_url.rstrip('/') + '/' + path.lstrip('/')
@@ -676,11 +721,34 @@ def _instance_id(instance):
                 return value
     return ''
 
+def _build_jwt_assertion(config, client_id, token_url):
+    algorithm = config.get('helix_jwt_algorithm', 'RS256')
+    now_unix = int(time_now().unix)
+    claims = {
+        'sub': config.get('helix_jwt_subject', 'runzero-apiaccess'),
+        'aud': token_url,
+        'iss': client_id,
+        'iat': now_unix,
+        'exp': now_unix + 3600,
+        'jti': random_hex(16),
+    }
+    return jwt_encode(claims, config.get('helix_jwt_private_key', ''), algorithm=algorithm)
+
 def _request_helix_access_token(config, client_id, client_secret, http_options):
     auth_path = config.get('auth_login_path', '')
     if auth_path == '' or auth_path == '/api/jwt/login':
-        auth_path = '/api/rx/authentication/oauth/token'
-    token_url = _join_url(config.get('helix_api_base', ''), auth_path)
+        auth_path = '/oauth2/v1.1/token'
+    auth_base = config.get('helix_auth_base', '')
+    if auth_base == '':
+        auth_base = config.get('helix_api_base', '')
+    token_url = _join_url(auth_base, auth_path)
+
+    assertion = _build_jwt_assertion(config, client_id, token_url)
+    if assertion == '':
+        _log('Failed to build signed JWT assertion')
+        return ''
+
+    _log('Requesting Helix OAuth token via JWT bearer grant at {}'.format(token_url))
     response = http_post(
         url=token_url,
         headers={
@@ -689,7 +757,9 @@ def _request_helix_access_token(config, client_id, client_secret, http_options):
             'Authorization': basic(client_id, client_secret),
         },
         body=bytes(url_encode({
-            'grant_type': 'client_credentials',
+            'grant_type': 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+            'audience': config.get('helix_token_audience', ''),
+            'assertion': assertion,
         })),
         **http_options
     )
@@ -697,7 +767,11 @@ def _request_helix_access_token(config, client_id, client_secret, http_options):
         _log('Helix token request returned no response')
         return ''
     if response.status_code < 200 or response.status_code >= 300:
-        _log('Helix token request failed status={} body={}'.format(response.status_code, _trim(response.body, config.get('max_log_body', 800))))
+        _log('Helix token request failed status={} location={} body={}'.format(
+            response.status_code,
+            _response_header(response, 'Location'),
+            _trim(response.body, config.get('max_log_body', 800)),
+        ))
         return ''
 
     payload = _safe_json_decode(response.body)
@@ -743,6 +817,7 @@ def _get_runzero_assets(config, access_token, http_options):
 def _update_instance(config, token, class_name, dataset_id, instance_id, payload, http_options):
     headers = _helix_headers(token)
     headers['X-HTTP-Method-Override'] = 'PATCH'
+    headers['X-Requested-By'] = 'XMLHttpRequest'
     response = http_post(
         url=_helix_endpoint(config, 'cmdb_update_path', class_name, dataset_id, instance_id),
         headers=headers,
@@ -757,9 +832,11 @@ def _update_instance(config, token, class_name, dataset_id, instance_id, payload
     return True
 
 def _create_instance(config, token, class_name, dataset_id, payload, http_options):
+    headers = _helix_headers(token)
+    headers['X-Requested-By'] = 'XMLHttpRequest'
     response = http_post(
         url=_helix_endpoint(config, 'cmdb_create_path', class_name, dataset_id),
-        headers=_helix_headers(token),
+        headers=headers,
         body=bytes(json_encode(payload)),
         **http_options
     )
@@ -851,7 +928,12 @@ def build_config(kwargs):
         'runzero_search': get_string(kwargs, 'runzero_search'),
         'runzero_timeout': get_int(kwargs, 'runzero_timeout', default=600),
         'helix_api_base': get_string(kwargs, 'helix_api_base'),
+        'helix_auth_base': get_string(kwargs, 'helix_auth_base'),
         'helix_dataset_id': get_string(kwargs, 'helix_dataset_id'),
+        'helix_jwt_private_key': get_string(kwargs, 'helix_jwt_private_key'),
+        'helix_jwt_algorithm': get_string(kwargs, 'helix_jwt_algorithm', default='RS256'),
+        'helix_jwt_subject': get_string(kwargs, 'helix_jwt_subject', default='runzero-apiaccess'),
+        'helix_token_audience': get_string(kwargs, 'helix_token_audience'),
         'class_names': DEFAULT_CLASS_NAMES,
         'auth_login_path': get_string(kwargs, 'auth_login_path'),
         'cmdb_query_path': get_string(kwargs, 'cmdb_query_path'),
@@ -882,6 +964,8 @@ def main(*args, **kwargs):
         'runzero_export_token',
         'helix_client_id',
         'helix_client_secret',
+        'helix_jwt_private_key',
+        'helix_token_audience',
         'runzero_console_url',
         'helix_api_base',
         'helix_dataset_id',
