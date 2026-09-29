@@ -20,7 +20,7 @@ CONFIG = {
 
 load("runzero.types", "ImportAsset", "to_custom_attributes")
 load("http", "get_json", "bearer", "oauth2_token", "url_join")
-load("kwargs", "require", "get_string", "get_int", "get_url_base", "get_http_options")
+load("kwargs", "require", "get_string", "get_int", "get_http_options")
 load("coerce", "as_dict", "as_list")
 
 def _text(value):
@@ -61,12 +61,12 @@ def _asset(kind, record, name, os_name, os_version, attrs, tags):
 def main(*args, **kwargs):
     require(kwargs, "client_id", "client_secret")
     token = oauth2_token(
-        token_url=get_url_base(kwargs, "token_url"),
+        token_url=get_string(kwargs, "token_url"),
         client_id=get_string(kwargs, "client_id"),
         client_secret=get_string(kwargs, "client_secret"),
         scope="clouds:read virtual_machines:read endpoint_protection:read",
     )
-    base_url = get_url_base(kwargs, "url")
+    base_url = get_string(kwargs, "url").rstrip("/") + "/"
     options = get_http_options(kwargs, "http_", "tls_", {"Authorization": bearer(token)})
     page_size = get_int(kwargs, "page_size", default=100)
 
