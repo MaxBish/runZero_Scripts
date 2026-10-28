@@ -9,43 +9,11 @@ CONFIG = {
     "version": "1",
     "maturity": "beta",
     "minVersion": "5.1.260818.0",
-    # This integration reports ONE population - Wazuh agents - but two grades of
-    # identifier, so the policy is declared per asset type here and the script
-    # picks a type per agent from whether the record carries a registration
-    # timestamp. See build_asset_id and registration_key for the id halves.
-    #
-    # no-type-break, because the split is about identifier quality inside one
-    # population and not about two different kinds of thing. An agent that
-    # reports no dateAdd today can report one tomorrow - a Wazuh upgrade, a
-    # re-enrollment, an API that starts populating the field - and it is the same
-    # agent on the same host throughout, so nothing about a type change should be
-    # allowed to veto a merge on its own.
-    #
-    # Be aware of what that does NOT buy, because it is easy to over-read:
-    # gaining dateAdd also changes the foreign id, from wazuh:<ns>:agent:<n> to
-    # wazuh:<ns>:agent:<n>:<reg>. Two foreign ids from one custom integration
-    # cannot sit on one asset whatever the break flags say, so that particular
-    # transition still forks and is reconciled in runZero. no-type-break is
-    # necessary but not sufficient here; it is declared so the type boundary is
-    # not a SECOND, independent reason for the same fork.
+    # Older consoles only promote the custom category into top-level fields.
+    "assetType": "custom",
+    # Allow matching against records previously imported under agent categories.
+    # Keep addressing breaks enabled: agents without dateAdd have reusable IDs.
     "matchBehavior": "no-type-break",
-    "assetTypeBehavior": {
-        # Registration time pins the ordinal, so the id can no longer be
-        # inherited by a later agent and is safe to merge on. An agent's own
-        # addressing must not then veto that merge: a laptop that moves
-        # between networks, a VM that is renamed, or a host that gains an
-        # interface is the same agent under the same id.
-        "agent": "no-mac-break no-ip-break no-name-break",
-        # Deliberately absent: "agent-unpinned", the type used when the record
-        # carries no dateAdd. Its id CAN be inherited by a later agent reusing
-        # the ordinal -- Wazuh allocates ids from a counter seeded off the
-        # highest id in client.keys, and <auth><purge> defaults to yes -- and a
-        # disagreeing MAC is then the only thing that can stop an unrelated new
-        # host being merged onto the old agent's asset. Wazuh's syscollector
-        # data is read off the host itself, so it is good enough evidence to
-        # break on. With no entry here that type keeps the platform default,
-        # every flag on, which is exactly what it needs.
-    },
     "params": [
         {
             "key": "url",
@@ -98,7 +66,7 @@ CONFIG = {
             "required": False,
             "default": 240,
             "min": 0,
-            "description": "Budget for agent listing and syscollector requests, including additional pages and retries. Keep below the Wazuh API max_request_per_minute (default 300). 0 disables the throttle.",
+            "description": "Budget for the per-agent netiface/netaddr enrichment requests (two per active agent). The Wazuh API enforces max_request_per_minute (default 300) and answers 429 above it, which silently costs those agents their interface data. 0 disables the throttle.",
         },
     ],
     "includes": {
@@ -107,9 +75,9 @@ CONFIG = {
     },
 }
 
-load('runzero.types', 'ImportAsset', 'NetworkInterface', 'to_custom_attributes')
+load('runzero.types', 'ImportAsset', 'NetworkInterface')
 load('json', json_decode='decode')
-load('net', 'ip_address', 'routable_ip', 'clean_hostnames', 'mac_key')
+load('net', 'ip_address', 'routable_ip')
 load('http', http_post='post', http_get='get', 'url_parse')
 load('base64', base64_encode='encode')
 load('time', 'sleep')
@@ -130,17 +98,48 @@ PAGE_SIZE = 500
 # page with no affected_items, so a manager that ignores `offset` -- or a proxy
 # replaying a cached response -- never reaches it and re-reads the same 500
 # agents forever. The no-progress check catches that on the first repeat. Either
-# stop fails the task so a truncated import cannot appear complete.
+# stop is logged, because a truncated import that says nothing looks exactly
+# like a complete one.
 MAX_RECORDS = 10000000
 MAX_PAGES = (MAX_RECORDS + PAGE_SIZE - 1) // PAGE_SIZE
 
+# os.platform values that name a distribution shipping only as a server
+# platform. Wazuh sets platform from the agent's own os-release ID, so these are
+# the ID values, not display names. Deliberately absent are ubuntu, debian,
+# fedora, arch, opensuse, alpine and darwin, each of which is as often a
+# workstation as a server, and sled (SUSE Linux Enterprise *Desktop*), the
+# desktop half of sles.
+SERVER_OS_PLATFORMS = [
+    'rhel', 'redhat', 'centos', 'rocky', 'almalinux', 'alma',
+    'amzn', 'ol', 'oracle', 'sles',
+]
+
 def device_type_for_os(os_data):
-    """Only an explicit server OS edition supplies a device-type hint."""
+    """Return a runZero device type for one agent's os block, or "".
+
+    The agent record is id, name, ip, status, version, node_name, group and the
+    os block -- there is no chassis, model or asset class anywhere in it, and
+    syscollector's netiface data adds only addressing -- so the os block is the
+    only genuine statement of role. An os.name carrying "server" ("Windows
+    Server 2019") and the server-only platforms above are unambiguous.
+
+    A bare "Ubuntu", "Debian", "Alpine Linux" or a macOS agent stays unset: it
+    is a desktop or a laptop and the record cannot say which, and a wrong hint
+    is worse than none.
+
+    This is only a hint. runZero prefers what it derives from the hardware or
+    from its own scan, and falls back to this exactly where an agent-only host
+    has never been reached by one.
+    """
     if type(os_data) != 'dict':
         return ""
     name = str(os_data.get('name', '') or '').lower()
-    if 'server' in re_sub(r"[^a-z0-9]+", " ", name).split():
+    platform = str(os_data.get('platform', '') or '').strip().lower()
+    if 'server' in name:
         return "Server"
+    for candidate in SERVER_OS_PLATFORMS:
+        if platform == candidate:
+            return "Server"
     return ""
 
 def page_signature(agents):
@@ -183,7 +182,7 @@ def authenticate_wazuh(host, username, password, config):
         password: Wazuh password
 
     Returns:
-        JWT token string; authentication failures abort the task.
+        JWT token string or None if authentication fails
     """
     auth_url = "{}/security/user/authenticate".format(host)
 
@@ -215,26 +214,6 @@ def authenticate_wazuh(host, username, password, config):
     print("Successfully authenticated with Wazuh API")
     return token
 
-def wazuh_get(host, ctx, path, params):
-    """Pace every data request and retry once with a fresh JWT on expiry."""
-    for attempt in range(2):
-        if ctx['throttle_ms'] > 0:
-            sleep("{}ms".format(ctx['throttle_ms']))
-        response = http_get(
-            host + path,
-            params=params,
-            timeout=600,
-            **get_http_options(ctx['config'], headers={
-                'Authorization': 'Bearer {}'.format(ctx['token']),
-                'Content-Type': 'application/json',
-            })
-        )
-        if response.status_code != 401 or attempt == 1:
-            return response
-        print("Token expired, re-authenticating...")
-        config = ctx['config']
-        ctx['token'] = authenticate_wazuh(host, config['username'], config['password'], config)
-
 def get_wazuh_agents(host, ctx, max_pages, handle_agents):
     """
     Retrieve agents from Wazuh using pagination, streaming each page to the
@@ -251,13 +230,14 @@ def get_wazuh_agents(host, ctx, max_pages, handle_agents):
     Returns:
         Count of agents fetched across every page.
     """
+    agents_url = "{}/agents".format(host)
+
     fetched = 0
     offset = 0
     pages = 0
     total = None
     capped = True
     last_signature = None
-    walk_error = None
 
     for _page in range(0, max_pages):
 
@@ -265,31 +245,32 @@ def get_wazuh_agents(host, ctx, max_pages, handle_agents):
             'offset': offset,
             'limit': PAGE_SIZE
         }
-        response = wazuh_get(host, ctx, "/agents", params)
+        # Headers are rebuilt per page because the enrichment handler can
+        # re-authenticate mid-run and swap the token in ctx.
+        headers = {
+            'Authorization': 'Bearer {}'.format(ctx['token']),
+            'Content-Type': 'application/json'
+        }
+
+        response = http_get(agents_url, params=params, timeout=600, **get_http_options(ctx['config'], headers=headers))
 
         if response.status_code != 200:
-            walk_error = "could not fetch agents: status {}".format(response.status_code)
+            print("Failed to fetch agents from Wazuh. Status:", response.status_code)
             capped = False
             break
 
         response_data = json_decode(response.body)
 
-        if type(response_data) != 'dict' or response_data.get('error', 1) != 0:
-            walk_error = "agent listing API error: {}".format(response_data.get('message', 'Unknown error') if type(response_data) == 'dict' else 'invalid response')
+        if response_data.get('error', 1) != 0:
+            print("Wazuh API error:", response_data.get('message', 'Unknown error'))
             capped = False
             break
         data = response_data.get('data', {})
-        if type(data) != 'dict' or type(data.get('affected_items')) != 'list':
-            walk_error = "invalid agent inventory response"
-            capped = False
-            break
         if total == None:
             total = reported_total(data)
         agents_batch = data.get('affected_items', [])
 
         if not agents_batch:
-            if total != None and fetched < total:
-                walk_error = "agent listing ended early ({})".format(retrieved_of(fetched, total))
             capped = False  # No more agents to fetch
             break
 
@@ -303,8 +284,8 @@ def get_wazuh_agents(host, ctx, max_pages, handle_agents):
         # imported twice.
         signature = page_signature(agents_batch)
         if signature == last_signature:
-            walk_error = 'paging stopped after {} pages (API returned the same page twice, {})'.format(
-                pages, retrieved_of(fetched, total))
+            print('wazuh: paging stopped after {} pages (API returned the same page twice, {})'.format(
+                pages, retrieved_of(fetched, total)))
             capped = False
             break
         last_signature = signature
@@ -315,53 +296,92 @@ def get_wazuh_agents(host, ctx, max_pages, handle_agents):
         offset += PAGE_SIZE
 
     if capped:
-        walk_error = 'page limit of {} hit (integration safety limit, {}) - raise the max_pages parameter to import the rest'.format(
-            max_pages, retrieved_of(fetched, total))
+        print('wazuh: page limit of {} hit (integration safety limit, {}) - raise the max_pages parameter to import the rest'.format(
+            max_pages, retrieved_of(fetched, total)))
 
     print("Retrieved {} agents from Wazuh".format(fetched))
-    if walk_error:
-        fail("wazuh: " + walk_error)
     return fetched
 
-def get_agent_network_data(host, ctx, agent_id, endpoint, max_pages):
-    """Read a complete syscollector inventory, or warn and discard it."""
-    rows = []
-    offset = 0
-    last_batch = None
-    error = "page limit of {} hit; raise max_pages".format(max_pages)
-    for _page in range(max_pages):
-        response = wazuh_get(host, ctx, "/syscollector/{}/{}".format(agent_id, endpoint), {
-            'offset': offset,
-            'limit': PAGE_SIZE,
-        })
-        if response.status_code != 200:
-            error = "status {}".format(response.status_code)
-            break
-        body = json_decode(response.body)
-        if type(body) != 'dict' or body.get('error', 1) != 0:
-            error = "API error: {}".format(body.get('message', 'unknown error') if type(body) == 'dict' else 'invalid response')
-            break
-        data = body.get('data')
-        if type(data) != 'dict' or type(data.get('affected_items')) != 'list':
-            error = "invalid inventory response"
-            break
-        batch = data['affected_items']
-        total = reported_total(data)
-        if not batch:
-            if total != None and len(rows) < total:
-                error = "inventory ended early: retrieved {}/{} rows".format(len(rows), total)
-                break
-            return rows
-        if batch == last_batch:
-            error = "API returned the same page twice"
-            break
-        last_batch = batch
-        rows.extend(batch)
-        offset += len(batch)
-        if (total != None and len(rows) >= total) or (total == None and len(batch) < PAGE_SIZE):
-            return rows
-    print("wazuh: agent {} {} enrichment incomplete ({}); discarding partial inventory".format(agent_id, endpoint, error))
-    return []
+# NEW FUNCTION: get network interfaces with MAC addresses
+def get_agent_network_interfaces(host, token, agent_id, config):
+    """
+    Retrieve network interfaces for a specific agent.
+
+    Args:
+        host: Wazuh host URL
+        token: JWT authentication token
+        agent_id: The ID of the agent
+
+    Returns:
+        Tuple of (list of network interface dictionaries, status_code)
+        Returns ([], status_code) if fails
+    """
+    netiface_url = "{}/syscollector/{}/netiface".format(host, agent_id)
+    headers = {
+        'Authorization': 'Bearer {}'.format(token),
+        'Content-Type': 'application/json'
+    }
+
+    response = http_get(netiface_url, timeout=600, **get_http_options(config, headers=headers))
+
+    if response.status_code != 200:
+        if response.status_code != 401:  # Don't print for 401, we'll handle that
+            print("Failed to fetch network interfaces for agent {}. Status: {}".format(agent_id, response.status_code))
+        return [], response.status_code
+
+    response_data = json_decode(response.body)
+
+    if response_data.get('error', 1) != 0:
+        print("Wazuh API error for agent {}: {}".format(agent_id, response_data.get('message', 'Unknown error')))
+        return [], response.status_code
+
+    return response_data.get('data', {}).get('affected_items', []), response.status_code
+
+# NEW FUNCTION: get network addresses (IPs) for interfaces
+def get_agent_network_addresses(host, token, agent_id, config):
+    """
+    Retrieve network addresses (IP addresses) for a specific agent.
+
+    Args:
+        host: Wazuh host URL
+        token: JWT authentication token
+        agent_id: The ID of the agent
+
+    Returns:
+        Tuple of (list of network address dictionaries, status_code)
+        Returns ([], status_code) if fails
+    """
+    netaddr_url = "{}/syscollector/{}/netaddr".format(host, agent_id)
+    headers = {
+        'Authorization': 'Bearer {}'.format(token),
+        'Content-Type': 'application/json'
+    }
+
+    response = http_get(netaddr_url, timeout=600, **get_http_options(config, headers=headers))
+
+    if response.status_code != 200:
+        if response.status_code != 401:  # Don't print for 401, we'll handle that
+            print("Failed to fetch network addresses for agent {}. Status: {}".format(agent_id, response.status_code))
+        return [], response.status_code
+
+    response_data = json_decode(response.body)
+
+    if response_data.get('error', 1) != 0:
+        print("Wazuh API error for agent {}: {}".format(agent_id, response_data.get('message', 'Unknown error')))
+        return [], response.status_code
+
+    return response_data.get('data', {}).get('affected_items', []), response.status_code
+
+# --- NEW: Helper function to validate MAC addresses ---
+def is_valid_mac(mac_address):
+    """
+    Checks if a MAC address is not a known invalid value.
+    """
+    if not mac_address:
+        return False
+    # List of known invalid MAC addresses
+    invalid_macs = ["00:00:00:00:00:00", "ee:ee:ee:ee:ee:ee"]
+    return mac_address.lower() not in invalid_macs
 
 def is_kubernetes_interface(iface_name):
     """
@@ -438,74 +458,98 @@ def is_kubernetes_interface(iface_name):
     return False
 
 def build_network_interface(network_interfaces_data, network_addresses_data, primary_ip_str):
-    """Associate addresses by interface name; never infer a MAC for agent.ip."""
+    """
+    Create a list of NetworkInterface objects from Wazuh network interface data.
+
+    Args:
+        network_interfaces_data: List of network interface dictionaries from Wazuh API (netiface endpoint).
+        network_addresses_data: List of network address dictionaries from Wazuh API (netaddr endpoint).
+        primary_ip_str: The primary IP address from the main agent data, as fallback.
+
+    Returns:
+        List of NetworkInterface objects
+    """
+    interfaces = []
+
+    # Build a mapping of interface name to IP addresses.
+    # Skip Kubernetes-related interfaces to avoid adding virtual IPs.
+    # routable_ip normalizes each value and returns None for loopback,
+    # link-local (fe80::/10 and Windows APIPA 169.254/16, which syscollector
+    # reports per interface), unspecified, multicast, broadcast, and anything
+    # that is not an address at all -- so a junk value costs the field, never
+    # the run, and non-identifying addresses never reach an interface.
     iface_to_ips = {}
-    excluded_ips = {}
     for addr_data in network_addresses_data:
         if type(addr_data) != 'dict':
             continue
         iface_name = str(addr_data.get('iface', '') or '')
         ip_addr_str = routable_ip(addr_data.get('address'))
+
+        # Skip Kubernetes interfaces (kube-ipvs0, cali*, nodelocaldns, etc.)
         if is_kubernetes_interface(iface_name):
-            if ip_addr_str:
-                excluded_ips[ip_addr_str] = True
             continue
-        if ip_addr_str:
+
+        if iface_name and ip_addr_str:
             if iface_name not in iface_to_ips:
                 iface_to_ips[iface_name] = []
-            if ip_addr_str not in iface_to_ips[iface_name]:
-                iface_to_ips[iface_name].append(ip_addr_str)
+            iface_to_ips[iface_name].append(ip_addr_str)
 
-    iface_to_macs = {}
+    # Process interfaces from syscollector data
     for interface_data in network_interfaces_data:
         if type(interface_data) != 'dict':
             continue
         iface_name = str(interface_data.get('name', '') or '')
+
+        # Skip Kubernetes interfaces (kube-ipvs0, cali*, nodelocaldns, etc.)
         if is_kubernetes_interface(iface_name):
             continue
-        if iface_name not in iface_to_macs:
-            iface_to_macs[iface_name] = []
+
+        # The API sends `mac: null` on interfaces without one; only a string
+        # can be split into candidate MACs.
         mac_address_string = interface_data.get('mac')
         if type(mac_address_string) != 'string':
             continue
-        for candidate in mac_address_string.split():
-            mac = mac_key(candidate)
-            if mac and mac != 'ee:ee:ee:ee:ee:ee' and mac not in iface_to_macs[iface_name]:
-                iface_to_macs[iface_name].append(mac)
 
-    interfaces = []
-    names = list(iface_to_macs)
-    for name in iface_to_ips:
-        if name not in iface_to_macs:
-            names.append(name)
-    for name in names:
-        ip4s = []
-        ip6s = []
-        for address in iface_to_ips.get(name, []):
-            ip = ip_address(address)
-            if ip.version == 4:
-                ip4s.append(ip)
-            else:
-                ip6s.append(ip)
-        # An unnamed address row cannot establish an IP-to-MAC relationship.
-        macs = iface_to_macs.get(name, []) if name else []
-        if macs:
-            for mac in macs:
-                interfaces.append(NetworkInterface(macAddress=mac, ipv4Addresses=ip4s, ipv6Addresses=ip6s))
-        elif ip4s or ip6s:
-            interfaces.append(NetworkInterface(ipv4Addresses=ip4s, ipv6Addresses=ip6s))
-        if not name:
-            for mac in iface_to_macs.get(name, []):
-                interfaces.append(NetworkInterface(macAddress=mac))
+        # Split by space to handle multiple MACs
+        macs = mac_address_string.split()
 
-    if not iface_to_ips:
-        primary = routable_ip(primary_ip_str)
-        if primary and primary not in excluded_ips:
-            ip = ip_address(primary)
-            interfaces.append(NetworkInterface(
-                ipv4Addresses=[ip] if ip.version == 4 else [],
-                ipv6Addresses=[ip] if ip.version == 6 else [],
-            ))
+        for mac_address in macs:
+            # Filter out invalid MAC addresses
+            if is_valid_mac(mac_address):
+                ip4s = []
+                ip6s = []
+
+                # Get IPs for this interface from netaddr data
+                ip_addresses = iface_to_ips.get(iface_name, [])
+
+                # If no IPs found for this interface, use primary IP as
+                # fallback. It goes through the same screen: agent.ip can hold
+                # the registration literal "any" or a hostname, neither of
+                # which is an address.
+                if not ip_addresses and primary_ip_str:
+                    primary = routable_ip(primary_ip_str)
+                    ip_addresses = [primary] if primary else []
+
+                # Parse and categorize IPs. ip_address returns None on input
+                # it cannot parse, and .version on None aborts the run, so the
+                # result is checked even though routable_ip already screened
+                # these values.
+                for ip_addr_str in ip_addresses:
+                    if not ip_addr_str:
+                        continue
+                    ip_addr = ip_address(ip_addr_str)
+                    if ip_addr == None:
+                        continue
+                    if ip_addr.version == 4:
+                        ip4s.append(ip_addr)
+                    elif ip_addr.version == 6:
+                        ip6s.append(ip_addr)
+
+                interfaces.append(NetworkInterface(
+                    macAddress=mac_address,
+                    ipv4Addresses=ip4s,
+                    ipv6Addresses=ip6s
+                ))
 
     return interfaces
 
@@ -566,9 +610,9 @@ def parse_os_info(os_data):
     if not os_data:
         return "Unknown", "Unknown"
    
-    os_name = str(os_data.get('name') or "")
-    os_platform = str(os_data.get('platform') or "")
-    os_version = str(os_data.get('version') or "")
+    os_name = os_data.get('name', "")
+    os_platform = os_data.get('platform', "")
+    os_version = os_data.get('version', "")
    
     # Combine name and platform for better identification
     if os_platform and os_platform.lower() != os_name.lower():
@@ -613,12 +657,16 @@ def build_agent_asset(agent, net_interfaces_data, net_addresses_data, namespace)
     first_seen_ts = agent.get('dateAdd', '')
     last_seen_ts = agent.get('lastKeepAlive', '')
 
-    hostnames = clean_hostnames([agent_name], extra=['unknown-agent'])
+    # Build hostnames list with length validation
+    hostnames = []
+    if agent_name and agent_name != 'unknown-agent':
+        hostname = agent_name
+        if hostname:
+            hostnames.append(hostname)
 
     # Prepare custom attributes with all available Wazuh data
     custom_attrs = {
         'wazuh_agent_id': str(agent_id),
-        'wazuh_agent_name': agent_name,
         'wazuh_agent_status': agent_status,
         'wazuh_agent_version': agent.get('version', ''),
         'wazuh_agent_manager': agent.get('manager', ''),
@@ -654,24 +702,17 @@ def build_agent_asset(agent, net_interfaces_data, net_addresses_data, namespace)
         'hostnames': hostnames,
         'os': os_name,
         'osVersion': os_version,
-        'customAttributes': to_custom_attributes(custom_attrs),
+        'customAttributes': custom_attrs,
     }
-    for key, value in custom_attrs.items():
-        if len(str(value)) > 1023:
-            print("wazuh: agent {} attribute {} exceeds 1023 characters; truncating metadata".format(agent_id, key))
 
-    # Leave uncertain roles to runZero fingerprinting.
+    # Omitted rather than set to '' when the os block names no role: an
+    # empty deviceType is still a value and displaces the type runZero would
+    # otherwise derive for itself.
     device_type = device_type_for_os(os_data)
     if device_type:
         asset_params['deviceType'] = device_type
 
-    # The runtime condition selects the asset type, which is what selects
-    # the merge policy; CONFIG["assetTypeBehavior"] holds the reasoning for
-    # both grades.
-    if registration_key(date_add):
-        asset_params['assetType'] = 'agent'
-    else:
-        asset_params['assetType'] = 'agent-unpinned'
+    if not registration_key(date_add):
         print("wazuh: agent {} reports no dateAdd; keeping default match behavior, since its ordinal could be reused".format(agent_id))
 
     return ImportAsset(**asset_params)
@@ -698,11 +739,13 @@ def main(**kwargs):
     # --kwargs path, so the defaults are repeated here.
     max_pages = get_int(kwargs, "max_pages", default=MAX_PAGES)
     if max_pages < 1:
-        fail("wazuh: max_pages must be at least 1")
+        max_pages = MAX_PAGES
     rpm = get_int(kwargs, "requests_per_minute", default=240)
-    if rpm < 0:
-        fail("wazuh: requests_per_minute must not be negative")
-    throttle_ms = ((60000 + rpm - 1) // rpm) if rpm > 0 else 0
+    # Milliseconds slept before each syscollector request. The Wazuh API
+    # enforces max_request_per_minute (default 300) and answers 429 above it;
+    # the raw http_get here does not retry, so without pacing every agent past
+    # the budget imports with no interface data.
+    throttle_ms = (60000 // rpm) if rpm > 0 else 0
 
     # The API base was compiled in as https://<hostname>:<port>, which cannot
     # reach a manager behind a reverse proxy, on a path prefix, or on plain
@@ -714,7 +757,8 @@ def main(**kwargs):
     elif wazuh_hostname:
         wazuh_host = "https://{}:{}".format(wazuh_hostname, port)
     else:
-        fail("wazuh: set either the Wazuh API URL or the manager hostname")
+        print("set either the Wazuh API URL or the manager hostname")
+        return None
 
     namespace = manager_namespace(wazuh_host)
     print("Connecting to Wazuh at:", wazuh_host)
@@ -731,8 +775,22 @@ def main(**kwargs):
         "token": token,
         "config": kwargs,
         "reported": 0,
-        "throttle_ms": throttle_ms,
+        "auth_ok": True,
     }
+
+    def throttle():
+        if throttle_ms > 0:
+            sleep("{}ms".format(throttle_ms))
+
+    def reauth():
+        print("Token expired, re-authenticating...")
+        fresh = authenticate_wazuh(wazuh_host, username, password, kwargs)
+        if not fresh:
+            print("Re-authentication failed, stopping network data collection")
+            ctx["auth_ok"] = False
+            return False
+        ctx["token"] = fresh
+        return True
 
     def handle_agents(agents_batch):
         """Enrich and report one page of agents before the next page is
@@ -747,9 +805,20 @@ def main(**kwargs):
             interfaces = []
             addresses = []
             agent_id = agent.get('id')
-            if agent_id:
-                interfaces = get_agent_network_data(wazuh_host, ctx, agent_id, "netiface", max_pages)
-                addresses = get_agent_network_data(wazuh_host, ctx, agent_id, "netaddr", max_pages)
+            if agent_id and ctx["auth_ok"]:
+                # Get network interfaces
+                throttle()
+                interfaces, status_code = get_agent_network_interfaces(wazuh_host, ctx["token"], agent_id, kwargs)
+                # Check if token expired (401), re-authenticate and retry
+                if status_code == 401 and reauth():
+                    interfaces, status_code = get_agent_network_interfaces(wazuh_host, ctx["token"], agent_id, kwargs)
+
+            if agent_id and ctx["auth_ok"]:
+                # Get network addresses
+                throttle()
+                addresses, status_code = get_agent_network_addresses(wazuh_host, ctx["token"], agent_id, kwargs)
+                if status_code == 401 and reauth():
+                    addresses, status_code = get_agent_network_addresses(wazuh_host, ctx["token"], agent_id, kwargs)
 
             # report_asset(None) is a no-op returning 0, so a declined record
             # (no id) is counted correctly.
@@ -761,5 +830,5 @@ def main(**kwargs):
         print("No agents retrieved from Wazuh")
         return []
 
-    print("Submitted {} Wazuh agents for import; check the task log for validation errors".format(ctx["reported"]))
+    print("Successfully processed {} Wazuh agents into RunZero assets".format(ctx["reported"]))
     return None
